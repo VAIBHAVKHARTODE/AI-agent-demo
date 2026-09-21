@@ -1,6 +1,5 @@
-# Deploy via Pipeline: the agent POSTs { "ref": "<generated-branch>" }
-# to this workflow. GitHub runs THIS file from that branch and
-# actions/checkout uses the same ref, so plan/apply use the generated .tf files.
+# Deploy via Pipeline: the agent POSTs { "ref": "<generated-branch>" }.
+# backend.tf (written from Settings TF_STATE_BUCKET) stores terraform.tfstate in S3.
 name: Terraform AWS Deploy
 
 on:
@@ -11,8 +10,15 @@ permissions:
   id-token: write
 
 concurrency:
-  group: terraform-aws-deploy-${{ github.ref }}
-  cancel-in-progress: false
+  group: terraform-aws-deploy-${{ github.repository }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  TF_STATE_KEY: ${{ vars.TF_STATE_KEY || format('{0}/terraform.tfstate', github.repository) }}
+  TF_STATE_REGION: ${{ vars.TF_STATE_REGION || 'us-east-1' }}
+  TF_IN_AUTOMATION: "true"
 
 jobs:
   discover:
@@ -37,13 +43,17 @@ jobs:
         id: terraform
         shell: bash
         run: |
-          directories=$(find . -type f -name '*.tf' \
-            -not -path '*/.terraform/*' \
-            -not -path './.git/*' \
-            -printf '%h\n' |
-            sed 's|^\./||' |
-            sort -u |
-            jq -R -s -c 'split("\n") | map(select(length > 0)) | map(if . == "" then "." else . end)')
+          if ls ./*.tf >/dev/null 2>&1; then
+            directories='["."]'
+          else
+            directories=$(find . -type f -name '*.tf' \
+              -not -path '*/.terraform/*' \
+              -not -path './.git/*' \
+              -printf '%h\n' |
+              sed 's|^\./||' |
+              sort -u |
+              jq -R -s -c 'split("\n") | map(select(length > 0)) | map(if . == "" then "." else . end)')
+          fi
 
           echo "directories=$directories" >> "$GITHUB_OUTPUT"
 
@@ -76,7 +86,7 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           role-session-name: terraform-github-actions
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          aws-region: ${{ env.AWS_REGION }}
           audience: sts.amazonaws.com
 
       - name: Verify AWS identity
@@ -87,8 +97,36 @@ jobs:
         with:
           terraform_wrapper: false
 
+      - name: Ensure S3 backend
+        run: |
+          if [ -f backend.tf ] && grep -q 'bucket' backend.tf; then
+            echo "Using backend.tf from the repo (Settings TF_STATE_BUCKET)."
+            exit 0
+          fi
+          if [ -z "${TF_STATE_BUCKET}" ]; then
+            echo "::error::Set Terraform State S3 Bucket in the agent Settings (writes backend.tf) or set GitHub variable TF_STATE_BUCKET."
+            exit 1
+          fi
+          printf '%s\n' \
+            'terraform {' \
+            '  backend "s3" {}' \
+            '}' > backend.tf
+          echo "Wrote partial backend.tf; init will pass bucket/key/region."
+
       - name: Terraform init
-        run: terraform init -input=false -no-color
+        run: |
+          if [ -f backend.tf ] && grep -q 'bucket' backend.tf; then
+            terraform init -input=false -no-color -reconfigure
+          elif [ -n "${TF_STATE_BUCKET}" ]; then
+            terraform init -input=false -no-color -reconfigure \
+              -backend-config="bucket=${TF_STATE_BUCKET}" \
+              -backend-config="key=${TF_STATE_KEY}" \
+              -backend-config="region=${TF_STATE_REGION}" \
+              -backend-config="encrypt=true"
+          else
+            echo "::error::No S3 backend configured."
+            exit 1
+          fi
 
       - name: Terraform plan
         run: terraform plan -input=false -no-color -out=tfplan
