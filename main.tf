@@ -6,7 +6,7 @@ resource "random_id" "bucket_suffix" {
 resource "aws_kms_key" "s3_kms_key" {
   description             = "KMS key for S3 bucket ${local.bucket_name_lower} encryption"
   deletion_window_in_days = var.kms_deletion_window_in_days
-  enable_key_rotation      = var.enable_kms_key_rotation
+  enable_key_rotation     = var.enable_kms_key_rotation
 
   tags = merge(
     local.common_tags,
@@ -17,7 +17,7 @@ resource "aws_kms_key" "s3_kms_key" {
 }
 
 resource "aws_kms_alias" "s3_kms_key_alias" {
-  name          = "alias/${local.bucket_name_lower}-key"
+  name          = "alias/${local.bucket_name_lower}-key-${random_id.bucket_suffix.hex}"
   target_key_id = aws_kms_key.s3_kms_key.key_id
 }
 
