@@ -2,24 +2,13 @@ resource "random_id" "bucket_suffix" {
   byte_length = 4
 }
 
-locals {
-  bucket_name_normalized = lower(var.bucket_name)
-  final_bucket_name      = "${local.bucket_name_normalized}-${random_id.bucket_suffix.hex}"
-
-  common_tags = {
-    Environment = var.environment
-    Project     = var.project
-    Owner       = var.owner
-    CostCenter  = var.cost_center
-    ManagedBy   = "terraform"
-    Terraform   = "true"
-  }
-}
-
-resource "aws_kms_key" "s3_kms_key" {
-  description             = "KMS key for ${local.final_bucket_name} S3 bucket encryption"
+# --------------------------------------------------------------------------
+# KMS Customer Managed Key for S3 Encryption
+# --------------------------------------------------------------------------
+resource "aws_kms_key" "s3_key" {
+  description             = "KMS key for encrypting ${local.bucket_name} S3 bucket"
   deletion_window_in_days = var.kms_deletion_window_in_days
-  enable_key_rotation     = true
+  enable_key_rotation      = var.enable_kms_key_rotation
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -28,27 +17,52 @@ resource "aws_kms_key" "s3_kms_key" {
         Sid       = "EnableRootAccountFullAccess"
         Effect    = "Allow"
         Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+          AWS = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root"
         }
         Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowS3ServiceUseOfKey"
+        Effect = "Allow"
+        Principal = {
+          Service = "s3.amazonaws.com"
+        }
+        Action = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey*"
+        ]
         Resource = "*"
       }
     ]
   })
 
-  tags = local.common_tags
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.bucket_name}-kms-key"
+    }
+  )
 }
 
-resource "aws_kms_alias" "s3_kms_key_alias" {
-  name          = "alias/${local.final_bucket_name}-key"
-  target_key_id = aws_kms_key.s3_kms_key.key_id
+resource "aws_kms_alias" "s3_key_alias" {
+  name          = "alias/${local.bucket_name}-key"
+  target_key_id = aws_kms_key.s3_key.key_id
 }
 
+# --------------------------------------------------------------------------
+# S3 Bucket
+# --------------------------------------------------------------------------
 resource "aws_s3_bucket" "this" {
-  bucket        = local.final_bucket_name
-  force_destroy = false
+  bucket        = local.bucket_name
+  force_destroy = var.force_destroy
 
-  tags = local.common_tags
+  tags = merge(
+    local.common_tags,
+    {
+      Name = local.bucket_name
+    }
+  )
 }
 
 resource "aws_s3_bucket_versioning" "this" {
@@ -65,7 +79,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm     = "aws:kms"
-      kms_master_key_id = aws_kms_key.s3_kms_key.arn
+      kms_master_key_id = aws_kms_key.s3_key.arn
     }
     bucket_key_enabled = true
   }
@@ -88,6 +102,9 @@ resource "aws_s3_bucket_ownership_controls" "this" {
   }
 }
 
+# --------------------------------------------------------------------------
+# Bucket Policy - Enforce TLS/HTTPS only
+# --------------------------------------------------------------------------
 resource "aws_s3_bucket_policy" "this" {
   bucket = aws_s3_bucket.this.id
 
