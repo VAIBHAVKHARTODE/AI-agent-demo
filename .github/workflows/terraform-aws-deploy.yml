@@ -2,11 +2,6 @@ name: Terraform AWS Deploy
 
 on:
   workflow_dispatch:
-    inputs:
-      apply:
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -111,5 +106,4 @@ jobs:
         run: terraform plan -input=false -no-color -out=tfplan
 
       - name: Terraform apply
-        if: ${{ inputs.apply }}
         run: terraform apply -input=false -auto-approve tfplan
