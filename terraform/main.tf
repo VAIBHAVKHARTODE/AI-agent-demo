@@ -1,20 +1,40 @@
-```hcl
-resource "random_id" "bucket" {
-  byte_length = 8
+resource "random_id" "bucket_suffix" {
+  byte_length = 4
+}
+
+resource "aws_kms_key" "s3_key" {
+  description             = "KMS key for encrypting ${local.bucket_name_lower} S3 bucket"
+  deletion_window_in_days = var.kms_deletion_window_in_days
+  enable_key_rotation     = var.enable_kms_key_rotation
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.bucket_name_lower}-kms-key"
+    }
+  )
+}
+
+resource "aws_kms_alias" "s3_key_alias" {
+  name          = "alias/${local.bucket_name_lower}-key"
+  target_key_id = aws_kms_key.s3_key.key_id
 }
 
 resource "aws_s3_bucket" "this" {
-  bucket = var.bucket_name
-  tags = {
-    Name        = var.bucket_name
-    Environment = "demo"
-    ManagedBy   = "Terraform"
-  }
-  force_destroy = true
+  bucket        = "${local.bucket_name_lower}-${random_id.bucket_suffix.hex}"
+  force_destroy = false
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.bucket_name_lower}-${random_id.bucket_suffix.hex}"
+    }
+  )
 }
 
 resource "aws_s3_bucket_versioning" "this" {
   bucket = aws_s3_bucket.this.id
+
   versioning_configuration {
     status = "Enabled"
   }
@@ -26,8 +46,9 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm     = "aws:kms"
-      kms_master_key_id = data.aws_kms_key.default.arn
+      kms_master_key_id = aws_kms_key.s3_key.arn
     }
+    bucket_key_enabled = true
   }
 }
 
@@ -39,4 +60,30 @@ resource "aws_s3_bucket_public_access_block" "this" {
   ignore_public_acls      = true
   restrict_public_buckets = true
 }
-```
+
+resource "aws_s3_bucket_policy" "deny_insecure_transport" {
+  bucket = aws_s3_bucket.this.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          aws_s3_bucket.this.arn,
+          "${aws_s3_bucket.this.arn}/*"
+        ]
+        Condition = {
+          Bool = {
+            "aws:SecureTransport" = "false"
+          }
+        }
+      }
+    ]
+  })
+
+  depends_on = [aws_s3_bucket_public_access_block.this]
+}
