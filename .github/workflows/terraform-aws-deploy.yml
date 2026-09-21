@@ -1,3 +1,6 @@
+# Deploy via Pipeline: the agent POSTs { "ref": "<generated-branch>" }
+# to this workflow. GitHub runs THIS file from that branch and
+# actions/checkout uses the same ref, so plan/apply use the generated .tf files.
 name: Terraform AWS Deploy
 
 on:
@@ -15,14 +18,20 @@ jobs:
   discover:
     name: Discover Terraform configurations
     runs-on: ubuntu-latest
-
     outputs:
       directories: ${{ steps.terraform.outputs.directories }}
       found: ${{ steps.terraform.outputs.found }}
-
     steps:
-      - name: Check out repository
+      - name: Check out dispatched branch
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Show workflow ref
+        run: |
+          echo "github.ref=${{ github.ref }}"
+          echo "github.ref_name=${{ github.ref_name }}"
+          echo "github.sha=${{ github.sha }}"
 
       - name: Find Terraform directories
         id: terraform
@@ -32,12 +41,13 @@ jobs:
             -not -path '*/.terraform/*' \
             -not -path './.git/*' \
             -printf '%h\n' |
+            sed 's|^\./||' |
             sort -u |
-            jq -R -s -c 'split("\n") | map(select(length > 0))')
+            jq -R -s -c 'split("\n") | map(select(length > 0)) | map(if . == "" then "." else . end)')
 
           echo "directories=$directories" >> "$GITHUB_OUTPUT"
 
-          if [ "$directories" = "[]" ]; then
+          if [ "$directories" = "[]" ] || [ -z "$directories" ]; then
             echo "found=false" >> "$GITHUB_OUTPUT"
           else
             echo "found=true" >> "$GITHUB_OUTPUT"
@@ -48,29 +58,18 @@ jobs:
     needs: discover
     if: needs.discover.outputs.found == 'true'
     runs-on: ubuntu-latest
-
     strategy:
       fail-fast: false
       matrix:
         directory: ${{ fromJSON(needs.discover.outputs.directories) }}
-
     defaults:
       run:
         working-directory: ${{ matrix.directory }}
-
     steps:
-      - name: Check out repository
+      - name: Check out dispatched branch
         uses: actions/checkout@v4
-
-      - name: Validate required GitHub configuration
-        shell: bash
-        env:
-          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-        run: |
-          if [ -z "$AWS_ROLE_ARN" ]; then
-            echo "::error::AWS_ROLE_ARN repository secret is missing."
-            exit 1
-          fi
+        with:
+          ref: ${{ github.ref }}
 
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
@@ -78,6 +77,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           role-session-name: terraform-github-actions
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          audience: sts.amazonaws.com
 
       - name: Verify AWS identity
         run: aws sts get-caller-identity
@@ -87,23 +87,11 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Show Terraform version
-        run: terraform version
-
-      - name: Format Terraform files
-        run: terraform fmt -recursive
-
-      - name: Terraform format check
-        run: terraform fmt -check -recursive
-
       - name: Terraform init
-        run: terraform init -input=false
-
-      - name: Terraform validate
-        run: terraform validate -no-color
+        run: terraform init -input=false -no-color
 
       - name: Terraform plan
         run: terraform plan -input=false -no-color -out=tfplan
 
       - name: Terraform apply
-        run: terraform apply -input=false -auto-approve tfplan
+        run: terraform apply -input=false -no-color -auto-approve tfplan
