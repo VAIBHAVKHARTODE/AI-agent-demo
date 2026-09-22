@@ -1,3 +1,1 @@
-data "aws_kms_alias" "existing" {
-  name = "alias/${var.kms_key_alias}"
-}
+data "aws_caller_identity" "current" {}
