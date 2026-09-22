@@ -10,6 +10,11 @@ on:
         description: Feature branch whose generated Terraform should be destroyed
         required: true
         type: string
+      confirm_destroy:
+        description: Set true only after reviewing the destroy plan. false runs plan only and does not delete.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -135,5 +140,9 @@ jobs:
             exit 1
           fi
 
+      - name: Terraform plan destroy
+        run: terraform plan -destroy -input=false -no-color
+
       - name: Terraform destroy
+        if: ${{ inputs.confirm_destroy == true || inputs.confirm_destroy == 'true' }}
         run: terraform destroy -input=false -no-color -auto-approve
