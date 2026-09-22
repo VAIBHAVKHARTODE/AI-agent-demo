@@ -1,13 +1,13 @@
 resource "aws_s3_bucket" "this" {
-  bucket = var.bucket_name
+  bucket        = var.bucket_name
+  force_destroy = false
 
-  tags = {
-    Name        = var.bucket_name
-    Environment = var.environment
-    Project     = var.project
-    Owner       = var.owner
-    ManagedBy   = "terraform"
-  }
+  tags = merge(
+    local.common_tags,
+    {
+      Name = var.bucket_name
+    }
+  )
 }
 
 resource "aws_s3_bucket_versioning" "this" {
