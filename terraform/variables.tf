@@ -10,16 +10,10 @@ variable "bucket_name" {
   default     = "vaibhav-khartode-ai-poc"
 }
 
-variable "kms_alias_name" {
-  description = "Name of the existing KMS key alias used for S3 bucket encryption (must already exist)"
-  type        = string
-  default     = "alias/vaibhav-khartode-ai-poc-key"
-}
-
 variable "environment" {
   description = "Environment name"
   type        = string
-  default     = "prod"
+  default     = "dev"
 }
 
 variable "project" {
@@ -34,14 +28,8 @@ variable "owner" {
   default     = "vaibhav-khartode"
 }
 
-variable "cost_center" {
-  description = "Cost center tag"
-  type        = string
-  default     = "unassigned"
-}
-
-variable "business_unit" {
-  description = "Business unit tag"
-  type        = string
-  default     = "unassigned"
+variable "kms_deletion_window_in_days" {
+  description = "Number of days to wait before deleting the KMS key"
+  type        = number
+  default     = 30
 }
