@@ -1,3 +1,3 @@
 data "aws_kms_alias" "existing" {
-  name = var.kms_alias_name
+  name = "alias/${var.kms_key_alias}"
 }
