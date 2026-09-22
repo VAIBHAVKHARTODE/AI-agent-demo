@@ -1,5 +1,5 @@
 variable "aws_region" {
-  description = "AWS region to deploy resources into"
+  description = "AWS region to deploy resources in"
   type        = string
   default     = "us-east-1"
 }
@@ -7,29 +7,29 @@ variable "aws_region" {
 variable "bucket_name" {
   description = "Name of the S3 bucket"
   type        = string
-  default     = "vaibhav-khartode-ai-poc"
-}
-
-variable "kms_key_alias" {
-  description = "Alias name (without alias/ prefix) of the existing KMS key used to encrypt the bucket"
-  type        = string
-  default     = "vaibhav-khartode-ai-poc-key"
+  default     = "vaibhav-khartode-ai-newpoc"
 }
 
 variable "environment" {
   description = "Environment name"
   type        = string
-  default     = "prod"
+  default     = "dev"
 }
 
 variable "project" {
   description = "Project name"
   type        = string
-  default     = "vaibhav-khartode-ai-poc"
+  default     = "ai-newpoc"
 }
 
 variable "owner" {
   description = "Owner of the resources"
   type        = string
   default     = "vaibhav-khartode"
+}
+
+variable "kms_deletion_window_in_days" {
+  description = "Number of days before KMS key is deleted after destruction request"
+  type        = number
+  default     = 30
 }

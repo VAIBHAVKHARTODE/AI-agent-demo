@@ -3,9 +3,9 @@ locals {
     Environment = var.environment
     Project     = var.project
     Owner       = var.owner
-    CostCenter  = "shared"
+    CostCenter  = "default"
     ManagedBy   = "terraform"
     Terraform   = "true"
-    BusinessUnit = "engineering"
+    BusinessUnit = "default"
   }
 }
