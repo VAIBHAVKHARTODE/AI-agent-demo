@@ -10,10 +10,16 @@ variable "bucket_name" {
   default     = "vaibhav-khartode-ai-poc"
 }
 
+variable "kms_key_alias" {
+  description = "Alias name (without alias/ prefix) of the existing KMS key used to encrypt the bucket"
+  type        = string
+  default     = "vaibhav-khartode-ai-poc-key"
+}
+
 variable "environment" {
   description = "Environment name"
   type        = string
-  default     = "dev"
+  default     = "prod"
 }
 
 variable "project" {
@@ -26,10 +32,4 @@ variable "owner" {
   description = "Owner of the resources"
   type        = string
   default     = "vaibhav-khartode"
-}
-
-variable "kms_deletion_window_in_days" {
-  description = "Number of days to wait before deleting the KMS key"
-  type        = number
-  default     = 30
 }
