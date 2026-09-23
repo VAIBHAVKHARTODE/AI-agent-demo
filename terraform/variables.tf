@@ -4,16 +4,10 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "bucket_name" {
-  description = "Name of the S3 bucket"
-  type        = string
-  default     = "vaibhav-khartode-ai-newpoc"
-}
-
 variable "project" {
-  description = "Project name for tagging"
+  description = "Project name used for naming and tagging"
   type        = string
-  default     = "vaibhav-khartode-ai-newpoc"
+  default     = "schoolspider"
 }
 
 variable "environment" {
@@ -25,7 +19,7 @@ variable "environment" {
 variable "owner" {
   description = "Owner tag value"
   type        = string
-  default     = "vaibhav-khartode"
+  default     = "platform-team"
 }
 
 variable "cost_center" {
@@ -40,13 +34,19 @@ variable "business_unit" {
   default     = "unassigned"
 }
 
+variable "bucket_name" {
+  description = "Name of the S3 bucket"
+  type        = string
+  default     = "schoolspider-dev-data"
+}
+
 variable "kms_deletion_window_in_days" {
-  description = "Number of days before the KMS key is deleted after destruction"
+  description = "Waiting period before KMS key deletion"
   type        = number
   default     = 30
 }
 
-variable "enable_kms_key_rotation" {
+variable "enable_bucket_key_rotation" {
   description = "Whether to enable automatic KMS key rotation"
   type        = bool
   default     = true
