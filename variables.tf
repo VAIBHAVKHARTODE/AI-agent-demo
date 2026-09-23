@@ -4,36 +4,6 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "project" {
-  description = "Project name used for naming and tagging"
-  type        = string
-  default     = "vaibhav-ai-poc"
-}
-
-variable "environment" {
-  description = "Environment name (dev, test, qa, uat, stage, prod)"
-  type        = string
-  default     = "dev"
-}
-
-variable "owner" {
-  description = "Owner of the resources"
-  type        = string
-  default     = "vaibhav"
-}
-
-variable "cost_center" {
-  description = "Cost center tag"
-  type        = string
-  default     = "unassigned"
-}
-
-variable "business_unit" {
-  description = "Business unit tag"
-  type        = string
-  default     = "engineering"
-}
-
 variable "instance_name" {
   description = "Name of the EC2 instance"
   type        = string
@@ -52,16 +22,34 @@ variable "root_volume_size" {
   default     = 8
 }
 
+variable "vpc_id" {
+  description = "VPC ID to launch the instance in (defaults to account default VPC)"
+  type        = string
+  default     = "tf-agent"
+}
+
+variable "subnet_id" {
+  description = "Subnet ID to launch the instance in (defaults to a default VPC subnet)"
+  type        = string
+  default     = "tf-agent"
+}
+
+variable "allowed_ssh_cidrs" {
+  description = "CIDR blocks allowed to SSH into the instance"
+  type        = list(string)
+  default     = ["10.0.0.0/8"]
+}
+
 variable "tags" {
   description = "Common tags applied to all resources"
   type        = map(string)
   default = {
-    Environment   = "dev"
-    Project       = "vaibhav-ai-poc"
-    Owner         = "vaibhav"
-    CostCenter    = "unassigned"
-    ManagedBy     = "terraform"
-    Terraform     = "true"
-    BusinessUnit  = "engineering"
+    Environment = "poc"
+    Project     = "vaibhav-ai-poc"
+    Owner       = "vaibhav"
+    CostCenter  = "unassigned"
+    ManagedBy   = "terraform"
+    Terraform   = "true"
+    BusinessUnit = "unassigned"
   }
 }
