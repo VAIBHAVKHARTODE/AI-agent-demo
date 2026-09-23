@@ -1,10 +1,14 @@
+locals {
+  subnet_id = var.subnet_id != "" ? var.subnet_id : data.aws_subnets.selected.ids[0]
+}
+
 module "instance_sg" {
   source  = "terraform-aws-modules/security-group/aws"
   version = "~> 5.0"
 
-  name        = "${var.project}-${var.environment}-instance-sg"
+  name        = "${var.instance_name}-sg"
   description = "Security group for ${var.instance_name}"
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = data.aws_vpc.selected.id
 
   ingress_with_cidr_blocks = [
     {
@@ -12,7 +16,7 @@ module "instance_sg" {
       to_port     = 22
       protocol    = "tcp"
       description = "SSH access"
-      cidr_blocks = "10.0.0.0/8"
+      cidr_blocks = join(",", var.allowed_ssh_cidrs)
     }
   ]
 
@@ -37,16 +41,18 @@ module "ec2_instance" {
 
   ami                    = data.aws_ami.amazon_linux.id
   instance_type          = var.instance_type
-  subnet_id              = element(data.aws_subnets.default.ids, 0)
+  subnet_id              = local.subnet_id
   vpc_security_group_ids = [module.instance_sg.security_group_id]
 
   root_block_device = [
     {
-      volume_size = var.root_volume_size
       volume_type = "gp3"
+      volume_size = var.root_volume_size
       encrypted   = true
     }
   ]
+
+  monitoring = true
 
   tags = merge(
     var.tags,
@@ -55,9 +61,9 @@ module "ec2_instance" {
     }
   )
 }
-variable "environment" {
+variable "allowed_ssh_cidrs" {
   type    = string
-  default = "example"
+  default = "10.0.0.0/16"
 }
 
 variable "instance_name" {
@@ -70,14 +76,14 @@ variable "instance_type" {
   default = "example"
 }
 
-variable "project" {
-  type    = string
-  default = "example"
-}
-
 variable "root_volume_size" {
   type    = string
   default = 2
+}
+
+variable "subnet_id" {
+  type    = string
+  default = "example"
 }
 
 variable "tags" {
