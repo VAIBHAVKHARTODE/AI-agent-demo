@@ -1,144 +1,86 @@
-# ---------------------------------------------------------------------------
-# KMS Customer Managed Key for S3 bucket encryption
-# ---------------------------------------------------------------------------
-resource "aws_kms_key" "s3" {
-  description             = "KMS key for ${var.bucket_name} S3 bucket encryption"
-  deletion_window_in_days = var.kms_deletion_window_in_days
-  enable_key_rotation     = var.enable_kms_key_rotation
+module "instance_sg" {
+  source  = "terraform-aws-modules/security-group/aws"
+  version = "~> 5.0"
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "EnableRootAccountFullAccess"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
-        }
-        Action   = "kms:*"
-        Resource = "*"
-      }
-    ]
-  })
+  name        = "${var.project}-${var.environment}-instance-sg"
+  description = "Security group for ${var.instance_name}"
+  vpc_id      = data.aws_vpc.default.id
+
+  ingress_with_cidr_blocks = [
+    {
+      from_port   = 22
+      to_port     = 22
+      protocol    = "tcp"
+      description = "SSH access"
+      cidr_blocks = "10.0.0.0/8"
+    }
+  ]
+
+  egress_with_cidr_blocks = [
+    {
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      description = "Allow all outbound traffic"
+      cidr_blocks = "0.0.0.0/0"
+    }
+  ]
+
+  tags = var.tags
+}
+
+module "ec2_instance" {
+  source  = "terraform-aws-modules/ec2-instance/aws"
+  version = "~> 5.0"
+
+  name = var.instance_name
+
+  ami                    = data.aws_ami.amazon_linux.id
+  instance_type          = var.instance_type
+  subnet_id              = element(data.aws_subnets.default.ids, 0)
+  vpc_security_group_ids = [module.instance_sg.security_group_id]
+
+  root_block_device = [
+    {
+      volume_size = var.root_volume_size
+      volume_type = "gp3"
+      encrypted   = true
+    }
+  ]
 
   tags = merge(
-    local.common_tags,
+    var.tags,
     {
-      Name = "${var.project}-${var.environment}-s3-kms"
+      Name = var.instance_name
     }
   )
 }
-
-resource "aws_kms_alias" "s3" {
-  name          = "alias/${var.project}-${var.environment}-s3"
-  target_key_id = aws_kms_key.s3.key_id
-}
-
-# ---------------------------------------------------------------------------
-# S3 Bucket
-# ---------------------------------------------------------------------------
-resource "aws_s3_bucket" "this" {
-  bucket        = var.bucket_name
-  force_destroy = var.force_destroy
-
-  tags = merge(
-    local.common_tags,
-    {
-      Name = var.bucket_name
-    }
-  )
-}
-
-resource "aws_s3_bucket_versioning" "this" {
-  bucket = aws_s3_bucket.this.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
-  bucket = aws_s3_bucket.this.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm     = "aws:kms"
-      kms_master_key_id = aws_kms_key.s3.arn
-    }
-    bucket_key_enabled = true
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "this" {
-  bucket = aws_s3_bucket.this.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_ownership_controls" "this" {
-  bucket = aws_s3_bucket.this.id
-
-  rule {
-    object_ownership = "BucketOwnerEnforced"
-  }
-}
-
-# Enforce TLS/HTTPS-only access to the bucket
-resource "aws_s3_bucket_policy" "this" {
-  bucket = aws_s3_bucket.this.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid       = "DenyInsecureTransport"
-        Effect    = "Deny"
-        Principal = "*"
-        Action    = "s3:*"
-        Resource = [
-          aws_s3_bucket.this.arn,
-          "${aws_s3_bucket.this.arn}/*"
-        ]
-        Condition = {
-          Bool = {
-            "aws:SecureTransport" = "false"
-          }
-        }
-      }
-    ]
-  })
-
-  depends_on = [aws_s3_bucket_public_access_block.this]
-}
-variable "bucket_name" {
-  type    = string
-  default = "tf-agent-bucket"
-}
-
-variable "enable_kms_key_rotation" {
-  type    = string
-  default = "alias/aws/ebs"
-}
-
 variable "environment" {
   type    = string
   default = "example"
 }
 
-variable "force_destroy" {
+variable "instance_name" {
+  type    = string
+  default = "tf-agent-instance-name"
+}
+
+variable "instance_type" {
   type    = string
   default = "example"
 }
 
-variable "kms_deletion_window_in_days" {
+variable "project" {
   type    = string
-  default = "alias/aws/ebs"
+  default = "example"
 }
 
-variable "project" {
+variable "root_volume_size" {
+  type    = string
+  default = 2
+}
+
+variable "tags" {
   type    = string
   default = "example"
 }
