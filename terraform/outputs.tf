@@ -1,24 +1,19 @@
-output "bucket_id" {
-  description = "The name of the S3 bucket"
-  value       = aws_s3_bucket.this.id
+output "instance_id" {
+  description = "ID of the EC2 instance"
+  value       = module.ec2_instance.id
 }
 
-output "bucket_arn" {
-  description = "The ARN of the S3 bucket"
-  value       = aws_s3_bucket.this.arn
+output "instance_private_ip" {
+  description = "Private IP address of the EC2 instance"
+  value       = module.ec2_instance.private_ip
 }
 
-output "kms_key_id" {
-  description = "The ID of the KMS key used for bucket encryption"
-  value       = aws_kms_key.s3.key_id
+output "instance_public_ip" {
+  description = "Public IP address of the EC2 instance, if assigned"
+  value       = module.ec2_instance.public_ip
 }
 
-output "kms_key_arn" {
-  description = "The ARN of the KMS key used for bucket encryption"
-  value       = aws_kms_key.s3.arn
-}
-
-output "kms_alias_name" {
-  description = "The alias of the KMS key used for bucket encryption"
-  value       = aws_kms_alias.s3.name
+output "security_group_id" {
+  description = "ID of the security group attached to the instance"
+  value       = module.instance_sg.security_group_id
 }
