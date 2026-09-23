@@ -9,3 +9,27 @@ locals {
     BusinessUnit = var.business_unit
   }
 }
+variable "business_unit" {
+  type    = string
+  default = "example"
+}
+
+variable "cost_center" {
+  type    = string
+  default = "example"
+}
+
+variable "environment" {
+  type    = string
+  default = "example"
+}
+
+variable "owner" {
+  type    = string
+  default = "example"
+}
+
+variable "project" {
+  type    = string
+  default = "example"
+}
