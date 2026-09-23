@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "project" {
   description = "Project name used for naming and tagging"
   type        = string
-  default     = "schoolspider"
+  default     = "vaibhav-ai-poc"
 }
 
 variable "environment" {
@@ -17,43 +17,51 @@ variable "environment" {
 }
 
 variable "owner" {
-  description = "Owner tag value"
+  description = "Owner of the resources"
   type        = string
-  default     = "platform-team"
+  default     = "vaibhav"
 }
 
 variable "cost_center" {
-  description = "CostCenter tag value"
+  description = "Cost center tag"
   type        = string
   default     = "unassigned"
 }
 
 variable "business_unit" {
-  description = "BusinessUnit tag value"
+  description = "Business unit tag"
   type        = string
-  default     = "unassigned"
+  default     = "engineering"
 }
 
-variable "bucket_name" {
-  description = "Name of the S3 bucket"
+variable "instance_name" {
+  description = "Name of the EC2 instance"
   type        = string
-  default     = "schoolspider-dev-app-data"
+  default     = "vaibhav-ai-poc-instance"
 }
 
-variable "kms_deletion_window_in_days" {
-  description = "Waiting period before KMS key deletion"
+variable "instance_type" {
+  description = "EC2 instance type"
+  type        = string
+  default     = "t2.micro"
+}
+
+variable "root_volume_size" {
+  description = "Root EBS volume size in GB"
   type        = number
-  default     = 30
+  default     = 8
 }
 
-variable "enable_kms_key_rotation" {
-  description = "Enable automatic KMS key rotation"
-  type        = bool
-  default     = true
-}
-
-variable "force_destroy" {
-  description = "Allow bucket to be destroyed even if it contains objects"
-  type        = bool
-  default     = false
+variable "tags" {
+  description = "Common tags applied to all resources"
+  type        = map(string)
+  default = {
+    Environment   = "dev"
+    Project       = "vaibhav-ai-poc"
+    Owner         = "vaibhav"
+    CostCenter    = "unassigned"
+    ManagedBy     = "terraform"
+    Terraform     = "true"
+    BusinessUnit  = "engineering"
+  }
 }
