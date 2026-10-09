@@ -1,14 +1,24 @@
-output "instance_id" {
-  description = "ID of the created EC2 instance"
-  value       = module.ec2_instance.id
+output "s3_bucket_id" {
+  description = "Name (ID) of the S3 bucket"
+  value       = module.s3_bucket.s3_bucket_id
 }
 
-output "instance_private_ip" {
-  description = "Private IP address of the EC2 instance"
-  value       = module.ec2_instance.private_ip
+output "s3_bucket_arn" {
+  description = "ARN of the S3 bucket"
+  value       = module.s3_bucket.s3_bucket_arn
 }
 
-output "instance_security_group_id" {
-  description = "Security group ID attached to the EC2 instance"
-  value       = module.instance_sg.security_group_id
+output "s3_bucket_region" {
+  description = "AWS region the S3 bucket resides in"
+  value       = module.s3_bucket.s3_bucket_region
+}
+
+output "kms_key_arn" {
+  description = "ARN of the KMS key used for S3 bucket encryption"
+  value       = module.s3_kms_key.key_arn
+}
+
+output "kms_key_id" {
+  description = "ID of the KMS key used for S3 bucket encryption"
+  value       = module.s3_kms_key.key_id
 }
