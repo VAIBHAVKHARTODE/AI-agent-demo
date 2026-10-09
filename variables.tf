@@ -5,9 +5,9 @@ variable "aws_region" {
 }
 
 variable "project" {
-  description = "Project name used for tagging"
+  description = "Project name used for tagging and naming"
   type        = string
-  default     = "vaibhav"
+  default     = "vaibhavaipoc"
 }
 
 variable "environment" {
@@ -17,31 +17,37 @@ variable "environment" {
 }
 
 variable "owner" {
-  description = "Owner of the infrastructure for tagging"
+  description = "Owner of the resources"
   type        = string
-  default     = "vaibhav"
+  default     = "platform-team"
 }
 
 variable "cost_center" {
-  description = "Cost center for tagging"
+  description = "Cost center for billing/tagging"
   type        = string
-  default     = "poc"
+  default     = "unassigned"
 }
 
 variable "business_unit" {
   description = "Business unit for tagging"
   type        = string
-  default     = "engineering"
+  default     = "unassigned"
 }
 
-variable "instance_type" {
-  description = "EC2 instance type"
+variable "bucket_name" {
+  description = "Name of the S3 bucket"
   type        = string
-  default     = "t2.micro"
+  default     = "vaibhavaipoc"
 }
 
-variable "instance_name" {
-  description = "Name tag applied to the EC2 instance"
-  type        = string
-  default     = "vaibhav-ai-poc-instance"
+variable "kms_key_deletion_window_in_days" {
+  description = "KMS key deletion window in days"
+  type        = number
+  default     = 30
+}
+
+variable "enable_kms_key_rotation" {
+  description = "Enable automatic KMS key rotation"
+  type        = bool
+  default     = true
 }
