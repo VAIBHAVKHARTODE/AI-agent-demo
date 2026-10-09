@@ -5,9 +5,9 @@ variable "aws_region" {
 }
 
 variable "project" {
-  description = "Project name used for tagging"
+  description = "Project name used for naming and tagging"
   type        = string
-  default     = "vaibhav"
+  default     = "vaibhavaipoc"
 }
 
 variable "environment" {
@@ -17,31 +17,45 @@ variable "environment" {
 }
 
 variable "owner" {
-  description = "Owner of the infrastructure for tagging"
+  description = "Owner tag value"
   type        = string
-  default     = "vaibhav"
+  default     = "platform-team"
 }
 
 variable "cost_center" {
-  description = "Cost center for tagging"
+  description = "CostCenter tag value"
   type        = string
-  default     = "poc"
+  default     = "shared"
 }
 
 variable "business_unit" {
-  description = "Business unit for tagging"
+  description = "BusinessUnit tag value"
   type        = string
   default     = "engineering"
 }
 
-variable "instance_type" {
-  description = "EC2 instance type"
+variable "bucket_name" {
+  description = "Name of the S3 bucket"
   type        = string
-  default     = "t2.micro"
+  default     = "vaibhavaipocbucket"
 }
 
-variable "instance_name" {
-  description = "Name tag applied to the EC2 instance"
+variable "kms_key_alias" {
+  description = "Alias name for the KMS key used to encrypt the S3 bucket"
   type        = string
-  default     = "vaibhav-ai-poc-instance"
+  default     = "alias/vaibhavaipocbucket-s3"
+}
+
+variable "tags" {
+  description = "Common tags applied to all resources"
+  type        = map(string)
+  default = {
+    Environment = "dev"
+    Project     = "vaibhavaipoc"
+    Owner       = "platform-team"
+    CostCenter  = "shared"
+    ManagedBy   = "terraform"
+    Terraform   = "true"
+    BusinessUnit = "engineering"
+  }
 }

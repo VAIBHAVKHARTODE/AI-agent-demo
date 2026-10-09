@@ -1,34 +1,41 @@
-module "instance_sg" {
-  source  = "terraform-aws-modules/security-group/aws"
-  version = "~> 5.0"
+module "s3_kms_key" {
+  source  = "terraform-aws-modules/kms/aws"
+  version = "~> 3.0"
 
-  name        = "${var.project}-${var.environment}-poc-sg"
-  description = "Security group for ${var.instance_name} EC2 instance"
-  vpc_id      = data.aws_vpc.default.id
+  description             = "KMS key for ${var.bucket_name} S3 bucket encryption"
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
 
-  egress_rules = ["all-all"]
+  aliases = [replace(var.kms_key_alias, "alias/", "")]
 
-  tags = local.tags
+  tags = var.tags
 }
 
-module "ec2_instance" {
-  source  = "terraform-aws-modules/ec2-instance/aws"
-  version = "~> 6.0"
+module "s3_bucket" {
+  source  = "terraform-aws-modules/s3-bucket/aws"
+  version = "~> 4.1"
 
-  name = var.instance_name
+  bucket = var.bucket_name
 
-  ami                    = data.aws_ami.amazon_linux_2.id
-  instance_type          = var.instance_type
-  subnet_id              = tolist(data.aws_subnets.default.ids)[0]
-  vpc_security_group_ids = [module.instance_sg.security_group_id]
+  versioning = {
+    enabled = true
+  }
 
-  associate_public_ip_address = false
-  monitoring                  = true
-
-  tags = merge(
-    local.tags,
-    {
-      Name = var.instance_name
+  server_side_encryption_configuration = {
+    rule = {
+      apply_server_side_encryption_by_default = {
+        sse_algorithm     = "aws:kms"
+        kms_master_key_id = module.s3_kms_key.key_arn
+      }
+      bucket_key_enabled = true
     }
-  )
+  }
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+  attach_public_policy    = false
+
+  tags = var.tags
 }
