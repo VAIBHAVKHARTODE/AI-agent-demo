@@ -1,0 +1,80 @@
+# Pull terraform.tfstate from S3 using GitHub OIDC (no long-lived AWS keys).
+# Dispatched by the agent Dashboard "Sync with AWS" action.
+name: Pull Terraform State
+
+on:
+  workflow_dispatch:
+    inputs:
+      tf_state_bucket:
+        description: S3 bucket for terraform state
+        required: false
+        type: string
+        default: ""
+      tf_state_key:
+        description: S3 object key for terraform.tfstate
+        required: false
+        type: string
+        default: ""
+      tf_state_region:
+        description: AWS region for the state bucket
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: pull-tf-state-${{ github.repository }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ${{ inputs.tf_state_region || vars.TF_STATE_REGION || vars.AWS_REGION || 'us-east-1' }}
+  TF_STATE_BUCKET: ${{ inputs.tf_state_bucket || vars.TF_STATE_BUCKET }}
+  TF_STATE_KEY: ${{ inputs.tf_state_key || vars.TF_STATE_KEY || format('{0}/terraform.tfstate', github.repository) }}
+  TF_STATE_REGION: ${{ inputs.tf_state_region || vars.TF_STATE_REGION || vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  pull-state:
+    name: Pull state via OIDC
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: terraform-agent-pull-state
+          aws-region: ${{ env.TF_STATE_REGION }}
+          audience: sts.amazonaws.com
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Download terraform.tfstate from S3
+        run: |
+          set -euo pipefail
+          if [ -z "${TF_STATE_BUCKET}" ]; then
+            echo "::error::TF_STATE_BUCKET is empty. Set it in agent Settings or workflow input."
+            exit 1
+          fi
+          echo "Fetching s3://${TF_STATE_BUCKET}/${TF_STATE_KEY} (region=${TF_STATE_REGION})"
+          aws s3 cp "s3://${TF_STATE_BUCKET}/${TF_STATE_KEY}" ./terraform.tfstate --region "${TF_STATE_REGION}"
+          test -s ./terraform.tfstate
+          python - <<'PY'
+          import json
+          with open("terraform.tfstate", "r", encoding="utf-8") as f:
+              state = json.load(f)
+          resources = state.get("resources") or []
+          managed = [r for r in resources if r.get("mode", "managed") == "managed"]
+          print(f"State serial={state.get('serial')} lineage={state.get('lineage')}")
+          print(f"Managed resources: {len(managed)}")
+          PY
+
+      - name: Upload state artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-state
+          path: terraform.tfstate
+          if-no-files-found: error
+          retention-days: 1
