@@ -3,12 +3,29 @@ module "s3_kms_key" {
   version = "~> 3.0"
 
   description             = "KMS key for ${var.bucket_name} S3 bucket encryption"
+  deletion_window_in_days = var.kms_deletion_window_in_days
   enable_key_rotation     = true
-  deletion_window_in_days = 30
 
   aliases = [replace(var.kms_key_alias, "alias/", "")]
 
-  tags = var.tags
+  key_statements = [
+    {
+      sid    = "AllowRootAccountFullAccess"
+      effect = "Allow"
+      actions = [
+        "kms:*"
+      ]
+      resources = ["*"]
+      principals = [
+        {
+          type        = "AWS"
+          identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+        }
+      ]
+    }
+  ]
+
+  tags = local.tags
 }
 
 module "s3_bucket" {
@@ -37,5 +54,5 @@ module "s3_bucket" {
   restrict_public_buckets = true
   attach_public_policy    = false
 
-  tags = var.tags
+  tags = local.tags
 }
