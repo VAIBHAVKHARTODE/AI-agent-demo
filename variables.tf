@@ -25,13 +25,13 @@ variable "owner" {
 variable "cost_center" {
   description = "Cost center tag value"
   type        = string
-  default     = "shared-services"
+  default     = "shared"
 }
 
 variable "business_unit" {
   description = "Business unit tag value"
   type        = string
-  default     = "engineering"
+  default     = "it"
 }
 
 variable "bucket_name" {
@@ -40,14 +40,14 @@ variable "bucket_name" {
   default     = "vaibhavaipoc"
 }
 
-variable "kms_deletion_window_in_days" {
-  description = "Waiting period before KMS key deletion"
-  type        = number
-  default     = 30
-}
-
 variable "kms_key_alias" {
-  description = "Alias for the customer managed KMS key used to encrypt the S3 bucket"
+  description = "Alias name for the KMS key used to encrypt the S3 bucket"
   type        = string
   default     = "alias/vaibhavaipoc-s3"
+}
+
+variable "enable_kms_key_rotation" {
+  description = "Whether to enable automatic KMS key rotation"
+  type        = bool
+  default     = true
 }
