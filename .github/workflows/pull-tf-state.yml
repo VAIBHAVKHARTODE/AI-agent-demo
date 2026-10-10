@@ -1,25 +1,24 @@
-# Pull terraform.tfstate from S3 using GitHub OIDC (no long-lived AWS keys).
-# Dispatched by the agent Dashboard "Sync with AWS" action.
+# Pull the latest terraform.tfstate from the S3 bucket configured in agent Settings.
+# Dispatched by Dashboard "Sync with AWS" with inputs:
+#   tf_state_bucket / tf_state_key / tf_state_region  (from Settings)
 name: Pull Terraform State
 
 on:
   workflow_dispatch:
     inputs:
       tf_state_bucket:
-        description: S3 bucket for terraform state
-        required: false
+        description: Settings → Terraform State S3 Bucket
+        required: true
         type: string
-        default: ""
       tf_state_key:
-        description: S3 object key for terraform.tfstate
-        required: false
+        description: Settings → Terraform State Key (object path in the bucket)
+        required: true
         type: string
-        default: ""
       tf_state_region:
-        description: AWS region for the state bucket
-        required: false
+        description: Settings → Terraform State Region
+        required: true
         type: string
-        default: ""
+        default: us-east-1
 
 permissions:
   contents: read
@@ -29,38 +28,67 @@ concurrency:
   group: pull-tf-state-${{ github.repository }}
   cancel-in-progress: true
 
-env:
-  AWS_REGION: ${{ inputs.tf_state_region || vars.TF_STATE_REGION || vars.AWS_REGION || 'us-east-1' }}
-  TF_STATE_BUCKET: ${{ inputs.tf_state_bucket || vars.TF_STATE_BUCKET }}
-  TF_STATE_KEY: ${{ inputs.tf_state_key || vars.TF_STATE_KEY || format('{0}/terraform.tfstate', github.repository) }}
-  TF_STATE_REGION: ${{ inputs.tf_state_region || vars.TF_STATE_REGION || vars.AWS_REGION || 'us-east-1' }}
-
 jobs:
   pull-state:
-    name: Pull state via OIDC
+    name: Pull latest state from Settings S3 bucket
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve state location from Settings inputs
+        id: loc
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUCKET="${{ inputs.tf_state_bucket }}"
+          KEY="${{ inputs.tf_state_key }}"
+          REGION="${{ inputs.tf_state_region }}"
+          BUCKET="${BUCKET// /}"
+          KEY="${KEY// /}"
+          REGION="${REGION:-us-east-1}"
+          if [ -z "$BUCKET" ]; then
+            echo "::error::tf_state_bucket input is empty. Set Terraform State S3 Bucket in agent Settings."
+            exit 1
+          fi
+          if [ -z "$KEY" ]; then
+            KEY="${{ github.repository }}/terraform.tfstate"
+          fi
+          echo "bucket=$BUCKET" >> "$GITHUB_OUTPUT"
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "region=$REGION" >> "$GITHUB_OUTPUT"
+          echo "Pulling latest state from s3://${BUCKET}/${KEY} (region=${REGION})"
+
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           role-session-name: terraform-agent-pull-state
-          aws-region: ${{ env.TF_STATE_REGION }}
+          aws-region: ${{ steps.loc.outputs.region }}
           audience: sts.amazonaws.com
 
       - name: Verify AWS identity
         run: aws sts get-caller-identity
 
-      - name: Download terraform.tfstate from S3
+      - name: Download latest terraform.tfstate from Settings bucket
+        shell: bash
         run: |
           set -euo pipefail
-          if [ -z "${TF_STATE_BUCKET}" ]; then
-            echo "::error::TF_STATE_BUCKET is empty. Set it in agent Settings or workflow input."
-            exit 1
-          fi
-          echo "Fetching s3://${TF_STATE_BUCKET}/${TF_STATE_KEY} (region=${TF_STATE_REGION})"
-          aws s3 cp "s3://${TF_STATE_BUCKET}/${TF_STATE_KEY}" ./terraform.tfstate --region "${TF_STATE_REGION}"
+          BUCKET="${{ steps.loc.outputs.bucket }}"
+          KEY="${{ steps.loc.outputs.key }}"
+          REGION="${{ steps.loc.outputs.region }}"
+
+          echo "Head object (confirm latest)..."
+          aws s3api head-object \
+            --bucket "$BUCKET" \
+            --key "$KEY" \
+            --region "$REGION" \
+            --query '{LastModified:LastModified,ContentLength:ContentLength,ETag:ETag}' \
+            --output json
+
+          # Always overwrite local file with the current object from S3
+          aws s3 cp "s3://${BUCKET}/${KEY}" ./terraform.tfstate \
+            --region "$REGION" \
+            --only-show-errors
           test -s ./terraform.tfstate
+
           python - <<'PY'
           import json
           with open("terraform.tfstate", "r", encoding="utf-8") as f:
@@ -69,9 +97,13 @@ jobs:
           managed = [r for r in resources if r.get("mode", "managed") == "managed"]
           print(f"State serial={state.get('serial')} lineage={state.get('lineage')}")
           print(f"Managed resources: {len(managed)}")
+          for r in managed[:20]:
+              print(f"  - {r.get('type')}.{r.get('name')}")
+          if len(managed) > 20:
+              print(f"  ... and {len(managed) - 20} more")
           PY
 
-      - name: Upload state artifact
+      - name: Upload state artifact for the agent
         uses: actions/upload-artifact@v4
         with:
           name: terraform-state
