@@ -29,37 +29,6 @@ module "sg1" {
   tags = var.tags
 }
 
-module "sg2" {
-  source  = "terraform-aws-modules/security-group/aws"
-  version = "~> 5.0"
-
-  name        = "vaibhavaipoc-sg2"
-  description = "Security group for vaibhavaipoc EC2 instance - SSH access"
-  vpc_id      = data.aws_vpc.default.id
-
-  ingress_with_cidr_blocks = [
-    {
-      from_port   = 22
-      to_port     = 22
-      protocol    = "tcp"
-      cidr_blocks = join(",", var.ssh_cidr)
-      description = "SSH access"
-    }
-  ]
-
-  egress_with_cidr_blocks = [
-    {
-      from_port   = 0
-      to_port     = 0
-      protocol    = "-1"
-      cidr_blocks = "0.0.0.0/0"
-      description = "Allow all outbound traffic"
-    }
-  ]
-
-  tags = var.tags
-}
-
 module "ec2_instance" {
   source  = "terraform-aws-modules/ec2-instance/aws"
   version = "~> 6.0"
