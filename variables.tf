@@ -4,6 +4,12 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "bucket_name" {
+  description = "Name of the S3 bucket"
+  type        = string
+  default     = "vaibhavaipoc"
+}
+
 variable "project" {
   description = "Project name used for tagging and naming"
   type        = string
@@ -13,7 +19,7 @@ variable "project" {
 variable "environment" {
   description = "Environment name (dev, test, qa, uat, stage, prod)"
   type        = string
-  default     = "prod"
+  default     = "dev"
 }
 
 variable "owner" {
@@ -23,45 +29,25 @@ variable "owner" {
 }
 
 variable "cost_center" {
-  description = "Cost center for billing tagging"
+  description = "Cost center for billing purposes"
   type        = string
-  default     = "unassigned"
+  default     = "shared"
 }
 
 variable "business_unit" {
-  description = "Business unit for tagging"
+  description = "Business unit for the resources"
   type        = string
-  default     = "unassigned"
-}
-
-variable "bucket_name" {
-  description = "Name of the S3 bucket"
-  type        = string
-  default     = "vaibhavaipoc"
+  default     = "engineering"
 }
 
 variable "kms_deletion_window_in_days" {
-  description = "Waiting period before KMS key deletion"
+  description = "Number of days before KMS key deletion"
   type        = number
   default     = 30
 }
 
-variable "kms_key_alias" {
-  description = "Alias for the KMS key used to encrypt the S3 bucket"
-  type        = string
-  default     = "alias/vaibhavaipoc-s3"
-}
-
-variable "tags" {
-  description = "Common tags applied to all resources"
-  type        = map(string)
-  default = {
-    Environment   = "prod"
-    Project       = "vaibhavaipoc"
-    Owner         = "platform-team"
-    CostCenter    = "unassigned"
-    ManagedBy     = "terraform"
-    Terraform     = "true"
-    BusinessUnit  = "unassigned"
-  }
+variable "enable_kms_key_rotation" {
+  description = "Whether to enable automatic KMS key rotation"
+  type        = bool
+  default     = true
 }
