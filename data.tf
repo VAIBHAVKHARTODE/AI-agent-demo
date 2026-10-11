@@ -11,6 +11,11 @@ data "aws_ami" "amazon_linux_2023" {
     name   = "virtualization-type"
     values = ["hvm"]
   }
+
+  filter {
+    name   = "root-device-type"
+    values = ["ebs"]
+  }
 }
 
 data "aws_vpc" "default" {
@@ -22,8 +27,4 @@ data "aws_subnets" "default" {
     name   = "vpc-id"
     values = [data.aws_vpc.default.id]
   }
-}
-
-data "aws_subnet" "selected" {
-  id = data.aws_subnets.default.ids[0]
 }
