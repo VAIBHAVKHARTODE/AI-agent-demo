@@ -37,7 +37,7 @@ variable "business_unit" {
 variable "instance_name" {
   description = "Name of the EC2 instance"
   type        = string
-  default     = "vaibhavaipoc"
+  default     = "vaibhavaipoc-sg2"
 }
 
 variable "security_group_name" {
