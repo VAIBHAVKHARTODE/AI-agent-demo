@@ -17,8 +17,3 @@ output "security_group_id" {
   description = "ID of the vaibhavaipoc-sg1 security group"
   value       = module.sg1.security_group_id
 }
-
-output "security_group_id_sg2" {
-  description = "ID of the vaibhavaipoc-sg2 security group"
-  value       = module.sg2.security_group_id
-}
