@@ -1,0 +1,105 @@
+# Manual cleanup for POC testing: wipe generated Terraform files on main,
+# keep only .github/workflows so Deploy / Destroy / Sync workflows stay intact.
+name: Repo Cleaning Workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type CLEAN to delete all files on main except .github/workflows
+        required: true
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repo-cleaning-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  clean-main:
+    name: Clean main (keep workflows only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require CLEAN confirmation
+        shell: bash
+        run: |
+          if [ "${{ inputs.confirm }}" != "CLEAN" ]; then
+            echo "::error::Refusing to run. Set input confirm=CLEAN to proceed."
+            exit 1
+          fi
+
+      - name: Only allow main branch
+        shell: bash
+        run: |
+          ref="${{ github.ref }}"
+          if [ "$ref" != "refs/heads/main" ] && [ "$ref" != "refs/heads/master" ]; then
+            echo "::error::Run this workflow from the main (or master) branch only. Current ref: $ref"
+            exit 1
+          fi
+
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Remove everything except .github/workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Keeping: .github/workflows"
+          echo "Removing all other tracked/untracked paths on ${{ github.ref_name }}..."
+
+          # Delete top-level entries except .git and .github
+          shopt -s dotglob nullglob
+          for path in * .[!.]* ..?*; do
+            [ -e "$path" ] || continue
+            case "$path" in
+              .|..|.git|.github) continue ;;
+              *)
+                echo "Removing: $path"
+                rm -rf -- "$path"
+                ;;
+            esac
+          done
+
+          # Inside .github keep only workflows/
+          if [ -d .github ]; then
+            for path in .github/* .github/.[!.]*; do
+              [ -e "$path" ] || continue
+              base=$(basename "$path")
+              if [ "$base" != "workflows" ]; then
+                echo "Removing: $path"
+                rm -rf -- "$path"
+              fi
+            done
+          fi
+
+          if [ ! -d .github/workflows ]; then
+            echo "::error::.github/workflows missing after cleanup — aborting without commit."
+            exit 1
+          fi
+
+          echo "Remaining tree:"
+          find . -path ./.git -prune -o -print | sed 's|^\./||' | sort
+
+      - name: Commit and push cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing to clean — main already has only workflow files."
+            exit 0
+          fi
+
+          git commit -m "chore: repo cleaning — keep .github/workflows only for testing"
+          git push origin "HEAD:${{ github.ref_name }}"
+          echo "Cleanup committed and pushed to ${{ github.ref_name }}."
