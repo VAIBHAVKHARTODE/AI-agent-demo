@@ -2,7 +2,7 @@ module "ssh_security_group" {
   source  = "terraform-aws-modules/security-group/aws"
   version = "~> 5.0"
 
-  name        = "aipoc-sg1"
+  name        = "${var.project}-${var.environment}-ec2-sg"
   description = "Security group allowing SSH access to ${var.instance_name}"
   vpc_id      = data.aws_vpc.default.id
 
