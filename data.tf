@@ -1,4 +1,4 @@
-data "aws_ami" "amazon_linux" {
+data "aws_ami" "al2023" {
   most_recent = true
   owners      = ["amazon"]
 
@@ -11,6 +11,11 @@ data "aws_ami" "amazon_linux" {
     name   = "virtualization-type"
     values = ["hvm"]
   }
+
+  filter {
+    name   = "root-device-type"
+    values = ["ebs"]
+  }
 }
 
 data "aws_vpc" "default" {
@@ -21,5 +26,10 @@ data "aws_subnets" "default" {
   filter {
     name   = "vpc-id"
     values = [data.aws_vpc.default.id]
+  }
+
+  filter {
+    name   = "default-for-az"
+    values = ["true"]
   }
 }
