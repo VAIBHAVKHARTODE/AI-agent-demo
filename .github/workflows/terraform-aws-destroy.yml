@@ -2,13 +2,13 @@
 #
 # Pipeline:
 #   1) Discover (always main)
-#   2) List resources to delete — TABLE ONLY
-#   3) Checkbox / Environment approval (only if confirm_destroy checked)
+#   2) Resources to delete — readable LIST
+#   3) ✅ Confirm — proceed with deletion (Environment approval)
 #   4) Destroy
 #
 # Manual:
-#   - Preview: leave confirm_destroy unchecked → table only, no delete
-#   - Delete:  check confirm_destroy → approve Environment "terraform-destroy" → destroy
+#   - Preview: leave confirm_destroy unchecked → list only, no delete
+#   - Delete:  check confirm_destroy → approve ✅ job → destroy
 #
 # Repo setup: Settings → Environments → "terraform-destroy" → Required reviewers
 name: Terraform AWS Destroy
@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm_destroy:
-        description: "☑️ Delete resources after the list (requires Environment approval). Unchecked = show table only."
+        description: "☑️ After the resource LIST, show ✅ Confirm step to proceed with deletion. Unchecked = list only."
         required: true
         type: boolean
         default: false
@@ -171,8 +171,8 @@ jobs:
           terraform plan -destroy -input=false -no-color -out=destroy.tfplan > /dev/null
           terraform show -json destroy.tfplan > destroy-plan.json
 
-      # TABLE ONLY — no extra mode/help text in this step
-      - name: Resources to delete (table)
+      # Readable list only (Summary + logs)
+      - name: Resources to delete (list)
         id: summary
         shell: bash
         run: |
@@ -181,6 +181,18 @@ jobs:
           import json
           import os
           from pathlib import Path
+
+          TYPE_LABELS = {
+              "aws_instance": "EC2 Instance",
+              "aws_security_group": "Security Group",
+              "aws_security_group_rule": "Security Group Rule",
+              "aws_vpc_security_group_egress_rule": "SG Egress Rule",
+              "aws_vpc_security_group_ingress_rule": "SG Ingress Rule",
+              "aws_eip": "Elastic IP",
+              "aws_subnet": "Subnet",
+              "aws_vpc": "VPC",
+              "aws_s3_bucket": "S3 Bucket",
+          }
 
           data = json.loads(Path("destroy-plan.json").read_text(encoding="utf-8"))
           changes = data.get("resource_changes") or []
@@ -203,30 +215,48 @@ jobs:
               name_tag = ""
               if isinstance(tags, dict):
                   name_tag = tags.get("Name") or tags.get("name") or ""
+              rtype = rc.get("type") or ""
               rows.append({
-                  "type": rc.get("type") or "",
+                  "type": rtype,
+                  "label": TYPE_LABELS.get(rtype, rtype.replace("aws_", "").replace("_", " ").title()),
                   "address": addr,
-                  "name_tag": str(name_tag) if name_tag else "",
-                  "aws_id": str(aws_id) if aws_id else "",
+                  "name_tag": str(name_tag) if name_tag else "—",
+                  "aws_id": str(aws_id) if aws_id else "—",
               })
 
-          # Markdown table only (job summary + log)
-          lines = [
-              "| # | Resource type | Terraform address | Name tag | AWS ID |",
-              "|---|---------------|-------------------|----------|--------|",
-          ]
-          if rows:
-              for i, r in enumerate(rows, 1):
-                  lines.append(
-                      f"| {i} | `{r['type']}` | `{r['address']}` | "
-                      f"{r['name_tag'] or '—'} | `{r['aws_id'] or '—'}` |"
-                  )
+          # --- Job Summary (readable list) ---
+          md = []
+          md.append(f"## Resources to delete ({len(rows)})")
+          md.append("")
+          if not rows:
+              md.append("_No resources to delete._")
           else:
-              lines.append("| — | — | _No resources to delete_ | — | — |")
+              for i, r in enumerate(rows, 1):
+                  md.append(f"### {i}. {r['label']}")
+                  md.append(f"- **Type:** `{r['type']}`")
+                  md.append(f"- **Address:** `{r['address']}`")
+                  md.append(f"- **Name:** {r['name_tag']}")
+                  md.append(f"- **AWS ID:** `{r['aws_id']}`")
+                  md.append("")
 
-          table = "\n".join(lines) + "\n"
-          Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text(table, encoding="utf-8")
-          print(table)
+          summary_text = "\n".join(md).rstrip() + "\n"
+          Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text(summary_text, encoding="utf-8")
+
+          # --- Console log (same list, easy to scan) ---
+          print("")
+          print(f"Resources to delete ({len(rows)})")
+          print("=" * 56)
+          if not rows:
+              print("  (none)")
+          else:
+              for i, r in enumerate(rows, 1):
+                  print(f"{i}. {r['label']}")
+                  print(f"   Type     : {r['type']}")
+                  print(f"   Address  : {r['address']}")
+                  print(f"   Name     : {r['name_tag']}")
+                  print(f"   AWS ID   : {r['aws_id']}")
+                  print("")
+          print("=" * 56)
 
           with Path("resources-to-delete.txt").open("w", encoding="utf-8") as fh:
               for r in rows:
@@ -248,9 +278,9 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
-  # Mid-pipeline "checkbox": Environment approval pause (only when confirm_destroy is checked)
+  # Mid-pipeline checkmark: review list above, then approve to proceed with deletion
   confirm-delete:
-    name: "3 · ☑️ Confirm delete"
+    name: "✅ Confirm — proceed with deletion"
     needs: [discover, plan-destroy]
     if: |
       always() &&
@@ -261,11 +291,19 @@ jobs:
     environment:
       name: terraform-destroy
     steps:
-      - name: Confirmed
-        run: echo "Delete confirmed. Proceeding to destroy on main."
+      - name: "✅ Approved — proceed with deletion"
+        run: |
+          {
+            echo "## ✅ Proceed with deletion"
+            echo ""
+            echo "Human approved. Destroy will run on **main** next."
+            echo ""
+            echo "- Review the **Resources to delete** list in the previous job before approving."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Approved. Proceeding to destroy on main."
 
   destroy:
-    name: "4 · Destroy - ${{ matrix.directory }}"
+    name: "4 · Delete resources - ${{ matrix.directory }}"
     needs: [discover, plan-destroy, confirm-delete]
     if: |
       always() &&
