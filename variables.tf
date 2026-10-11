@@ -4,40 +4,40 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "project" {
-  description = "Project name used for resource naming and tagging"
+variable "name" {
+  description = "Name of the EC2 instance"
   type        = string
   default     = "vaibhavaipoc"
 }
 
 variable "environment" {
-  description = "Environment name (dev, test, qa, uat, stage, prod)"
+  description = "Environment name"
   type        = string
   default     = "dev"
 }
 
-variable "owner" {
-  description = "Owner tag value"
+variable "project" {
+  description = "Project name"
   type        = string
-  default     = "platform-team"
+  default     = "vaibhavaipoc"
+}
+
+variable "owner" {
+  description = "Owner of the resources"
+  type        = string
+  default     = "vaibhav"
 }
 
 variable "cost_center" {
-  description = "CostCenter tag value"
+  description = "Cost center for billing"
   type        = string
-  default     = "unassigned"
+  default     = "default-cost-center"
 }
 
 variable "business_unit" {
-  description = "BusinessUnit tag value"
+  description = "Business unit owning the resources"
   type        = string
-  default     = "unassigned"
-}
-
-variable "instance_name" {
-  description = "Name of the EC2 instance"
-  type        = string
-  default     = "vaibhavaipoc"
+  default     = "default-bu"
 }
 
 variable "instance_type" {
@@ -47,7 +47,25 @@ variable "instance_type" {
 }
 
 variable "root_volume_size" {
-  description = "Root EBS volume size in GB"
+  description = "Root volume size in GB"
   type        = number
-  default     = 20
+  default     = 30
+}
+
+variable "root_volume_type" {
+  description = "Root volume type"
+  type        = string
+  default     = "gp3"
+}
+
+variable "allowed_ssh_cidr" {
+  description = "CIDR block allowed to SSH into the instance"
+  type        = string
+  default     = "0.0.0.0/0"
+}
+
+variable "associate_public_ip_address" {
+  description = "Whether to associate a public IP with the instance"
+  type        = bool
+  default     = true
 }
