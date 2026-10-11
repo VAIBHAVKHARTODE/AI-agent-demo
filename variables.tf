@@ -4,40 +4,46 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "name" {
-  description = "Name of the EC2 instance"
+variable "project" {
+  description = "Project name used for tagging and naming"
   type        = string
   default     = "vaibhavaipoc"
 }
 
 variable "environment" {
-  description = "Environment name"
+  description = "Environment name (dev, test, qa, uat, stage, prod)"
   type        = string
   default     = "dev"
 }
 
-variable "project" {
-  description = "Project name"
-  type        = string
-  default     = "vaibhavaipoc"
-}
-
 variable "owner" {
-  description = "Owner of the resources"
+  description = "Owner tag value"
   type        = string
-  default     = "vaibhav"
+  default     = "platform-team"
 }
 
 variable "cost_center" {
-  description = "Cost center for billing"
+  description = "CostCenter tag value"
   type        = string
-  default     = "default-cost-center"
+  default     = "unassigned"
 }
 
 variable "business_unit" {
-  description = "Business unit owning the resources"
+  description = "BusinessUnit tag value"
   type        = string
-  default     = "default-bu"
+  default     = "unassigned"
+}
+
+variable "instance_name" {
+  description = "Name of the EC2 instance"
+  type        = string
+  default     = "vaibhavaipoc-ec2"
+}
+
+variable "security_group_name" {
+  description = "Name of the security group attached to the EC2 instance"
+  type        = string
+  default     = "vaibhavaipoc-sg"
 }
 
 variable "instance_type" {
@@ -47,25 +53,39 @@ variable "instance_type" {
 }
 
 variable "root_volume_size" {
-  description = "Root volume size in GB"
+  description = "Root EBS volume size in GB"
   type        = number
   default     = 30
 }
 
 variable "root_volume_type" {
-  description = "Root volume type"
+  description = "Root EBS volume type"
   type        = string
   default     = "gp3"
 }
 
-variable "allowed_ssh_cidr" {
-  description = "CIDR block allowed to SSH into the instance"
+variable "ssh_allowed_cidr" {
+  description = "CIDR block allowed to SSH into the instance. Restrict this in production environments."
   type        = string
   default     = "0.0.0.0/0"
 }
 
 variable "associate_public_ip_address" {
-  description = "Whether to associate a public IP with the instance"
+  description = "Whether to associate a public IP address with the instance"
   type        = bool
   default     = true
+}
+
+variable "tags" {
+  description = "Common tags applied to all resources"
+  type        = map(string)
+  default = {
+    Environment = "dev"
+    Project     = "vaibhavaipoc"
+    Owner       = "platform-team"
+    CostCenter  = "unassigned"
+    ManagedBy   = "terraform"
+    Terraform   = "true"
+    BusinessUnit = "unassigned"
+  }
 }
