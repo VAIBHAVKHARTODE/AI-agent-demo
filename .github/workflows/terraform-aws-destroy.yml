@@ -1,17 +1,21 @@
-# Generate Infra → Destroy Resources.
-# Dispatched from main with input terraform_ref = latest deployed generate-infra-* branch.
-# Checks out that feature branch and terraform destroy using the same S3 state as deploy.
+# Destroy AWS resources with human approval gate.
+# Flow: discover → plan-destroy (list resources) → await GitHub Environment approval → destroy
+# Works for main or any feature branch via terraform_ref (or the branch the workflow is run from).
+#
+# Repo setup (one-time): Settings → Environments → create "terraform-destroy"
+# and add Required reviewers. The await-approval job pauses until a reviewer approves.
 name: Terraform AWS Destroy
 
 on:
   workflow_dispatch:
     inputs:
       terraform_ref:
-        description: Feature branch whose generated Terraform should be destroyed
-        required: true
+        description: Branch/ref to destroy (main or feature). Leave empty to use the branch this workflow is run from.
+        required: false
         type: string
+        default: ""
       confirm_destroy:
-        description: Set true only after reviewing the destroy plan. false runs plan only and does not delete.
+        description: After plan lists resources, wait for human approval then destroy. false = plan/list only (no delete).
         required: false
         type: boolean
         default: false
@@ -19,10 +23,11 @@ on:
 permissions:
   contents: read
   id-token: write
+  actions: read
 
 concurrency:
-  group: terraform-aws-deploy-${{ github.repository }}
-  cancel-in-progress: true
+  group: terraform-aws-destroy-${{ github.repository }}-${{ inputs.terraform_ref || github.ref_name }}
+  cancel-in-progress: false
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -30,7 +35,7 @@ env:
   TF_STATE_KEY: ${{ vars.TF_STATE_KEY || format('{0}/terraform.tfstate', github.repository) }}
   TF_STATE_REGION: ${{ vars.TF_STATE_REGION || 'us-east-1' }}
   TF_IN_AUTOMATION: "true"
-  TERRAFORM_REF: ${{ inputs.terraform_ref }}
+  TERRAFORM_REF: ${{ inputs.terraform_ref || github.ref_name }}
 
 jobs:
   discover:
@@ -39,17 +44,31 @@ jobs:
     outputs:
       directories: ${{ steps.terraform.outputs.directories }}
       found: ${{ steps.terraform.outputs.found }}
+      terraform_ref: ${{ steps.ref.outputs.terraform_ref }}
     steps:
-      - name: Check out generated feature branch
+      - name: Resolve destroy ref (main or feature branch)
+        id: ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF="${{ inputs.terraform_ref }}"
+          if [ -z "$REF" ]; then
+            REF="${{ github.ref_name }}"
+          fi
+          echo "terraform_ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Destroy target ref: $REF"
+
+      - name: Check out branch to destroy
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.terraform_ref }}
+          ref: ${{ steps.ref.outputs.terraform_ref }}
 
-      - name: Show destroy ref
+      - name: Show destroy context
         run: |
-          echo "terraform_ref=${{ inputs.terraform_ref }}"
+          echo "terraform_ref=${{ steps.ref.outputs.terraform_ref }}"
           echo "github.ref=${{ github.ref }}"
-          echo "github.sha=${{ github.sha }}"
+          echo "github.ref_name=${{ github.ref_name }}"
+          echo "confirm_destroy=${{ inputs.confirm_destroy }}"
 
       - name: Find Terraform directories
         id: terraform
@@ -75,8 +94,8 @@ jobs:
             echo "found=true" >> "$GITHUB_OUTPUT"
           fi
 
-  destroy:
-    name: Terraform destroy - ${{ matrix.directory }}
+  plan-destroy:
+    name: Plan destroy - ${{ matrix.directory }}
     needs: discover
     if: needs.discover.outputs.found == 'true'
     runs-on: ubuntu-latest
@@ -88,16 +107,26 @@ jobs:
       run:
         working-directory: ${{ matrix.directory }}
     steps:
-      - name: Check out generated feature branch
+      - name: Artifact key for this directory
+        id: artifact
+        shell: bash
+        run: |
+          DIR="${{ matrix.directory }}"
+          KEY=$(echo "$DIR" | sed 's#[^A-Za-z0-9._-]#-#g')
+          if [ -z "$KEY" ] || [ "$KEY" = "." ]; then KEY="root"; fi
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "Artifact key: $KEY"
+
+      - name: Check out branch to destroy
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.terraform_ref }}
+          ref: ${{ needs.discover.outputs.terraform_ref }}
 
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: terraform-github-actions-destroy
+          role-session-name: terraform-github-actions-destroy-plan
           aws-region: ${{ env.AWS_REGION }}
           audience: sts.amazonaws.com
 
@@ -112,7 +141,7 @@ jobs:
       - name: Ensure S3 backend
         run: |
           if [ -f backend.tf ] && grep -q 'bucket' backend.tf; then
-            echo "Using backend.tf from branch ${TERRAFORM_REF}."
+            echo "Using backend.tf from branch ${{ needs.discover.outputs.terraform_ref }}."
             exit 0
           fi
           if [ -z "${TF_STATE_BUCKET}" ]; then
@@ -140,9 +169,207 @@ jobs:
             exit 1
           fi
 
-      - name: Terraform plan destroy
-        run: terraform plan -destroy -input=false -no-color
+      - name: Terraform plan destroy (list resources)
+        id: plan
+        run: |
+          set -euo pipefail
+          terraform plan -destroy -input=false -no-color -out=destroy.tfplan | tee destroy-plan.txt
+          terraform show -no-color destroy.tfplan | tee destroy-plan-human.txt
+          terraform show -json destroy.tfplan > destroy-plan.json
 
-      - name: Terraform destroy
-        if: ${{ inputs.confirm_destroy == true || inputs.confirm_destroy == 'true' }}
-        run: terraform destroy -input=false -no-color -auto-approve
+      - name: List resources that will be deleted
+        id: summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          plan_path = Path("destroy-plan.json")
+          data = json.loads(plan_path.read_text(encoding="utf-8"))
+          changes = data.get("resource_changes") or []
+          to_delete = []
+          for rc in changes:
+              actions = (rc.get("change") or {}).get("actions") or []
+              if "delete" in actions or actions == ["delete"] or "replace" in str(actions):
+                  addr = rc.get("address") or ""
+                  rtype = rc.get("type") or ""
+                  name = rc.get("name") or ""
+                  to_delete.append((addr, rtype, name, actions))
+
+          # Also include pure destroy actions
+          to_delete_addrs = []
+          for rc in changes:
+              actions = (rc.get("change") or {}).get("actions") or []
+              if "delete" in actions:
+                  to_delete_addrs.append(rc.get("address") or "")
+
+          unique = sorted({a for a in to_delete_addrs if a})
+          count = len(unique)
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          lines = [
+              "## Destroy plan — resources to delete",
+              "",
+              f"- **Branch/ref:** `{os.environ.get('TERRAFORM_REF', '')}`",
+              f"- **Directory:** `{os.environ.get('TF_DIR', '.')}`",
+              f"- **Resources to destroy:** **{count}**",
+              "",
+          ]
+          if unique:
+              lines.append("| # | Resource address |")
+              lines.append("|---|------------------|")
+              for i, addr in enumerate(unique, 1):
+                  lines.append(f"| {i} | `{addr}` |")
+              lines.append("")
+              lines.append("### Next step")
+              lines.append(
+                  "If `confirm_destroy` is enabled, a **human must approve** "
+                  "the `terraform-destroy` GitHub Environment before destroy runs."
+              )
+          else:
+              lines.append("_No resources marked for destroy in this plan._")
+
+          summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(f"Resources to destroy ({count}):")
+          for addr in unique:
+              print(f"  - {addr}")
+
+          out = Path(os.environ["GITHUB_OUTPUT"])
+          with out.open("a", encoding="utf-8") as fh:
+              fh.write(f"has_destroy={'true' if count > 0 else 'false'}\n")
+              fh.write(f"destroy_count={count}\n")
+          PY
+        env:
+          TERRAFORM_REF: ${{ needs.discover.outputs.terraform_ref }}
+          TF_DIR: ${{ matrix.directory }}
+
+      - name: Upload destroy plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: destroy-plan-${{ steps.artifact.outputs.key }}
+          path: |
+            ${{ matrix.directory }}/destroy.tfplan
+            ${{ matrix.directory }}/destroy-plan.txt
+            ${{ matrix.directory }}/destroy-plan-human.txt
+            ${{ matrix.directory }}/destroy-plan.json
+          if-no-files-found: error
+          retention-days: 5
+
+  await-human-approval:
+    name: Human approval before destroy
+    needs: [discover, plan-destroy]
+    if: |
+      always() &&
+      needs.discover.outputs.found == 'true' &&
+      needs.plan-destroy.result == 'success' &&
+      (inputs.confirm_destroy == true || inputs.confirm_destroy == 'true')
+    runs-on: ubuntu-latest
+    # Pauses until a required reviewer approves in GitHub Environment "terraform-destroy"
+    environment:
+      name: terraform-destroy
+    steps:
+      - name: Approval recorded
+        run: |
+          echo "## Human approval granted for destroy" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Branch/ref:** \`${{ needs.discover.outputs.terraform_ref }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Requested by:** \`${{ github.actor }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Review the plan job logs / summary for the full resource delete list before approving.**" >> "$GITHUB_STEP_SUMMARY"
+          echo "Approval received. Proceeding to terraform destroy."
+
+  destroy:
+    name: Terraform destroy - ${{ matrix.directory }}
+    needs: [discover, plan-destroy, await-human-approval]
+    if: |
+      always() &&
+      needs.discover.outputs.found == 'true' &&
+      needs.plan-destroy.result == 'success' &&
+      needs.await-human-approval.result == 'success' &&
+      (inputs.confirm_destroy == true || inputs.confirm_destroy == 'true')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: ${{ fromJSON(needs.discover.outputs.directories) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - name: Artifact key for this directory
+        id: artifact
+        shell: bash
+        run: |
+          DIR="${{ matrix.directory }}"
+          KEY=$(echo "$DIR" | sed 's#[^A-Za-z0-9._-]#-#g')
+          if [ -z "$KEY" ] || [ "$KEY" = "." ]; then KEY="root"; fi
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Check out branch to destroy
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.discover.outputs.terraform_ref }}
+
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: terraform-github-actions-destroy-apply
+          aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Ensure S3 backend
+        run: |
+          if [ -f backend.tf ] && grep -q 'bucket' backend.tf; then
+            echo "Using backend.tf from branch ${{ needs.discover.outputs.terraform_ref }}."
+            exit 0
+          fi
+          if [ -z "${TF_STATE_BUCKET}" ]; then
+            echo "::error::Set Terraform State S3 Bucket in Settings or TF_STATE_BUCKET variable."
+            exit 1
+          fi
+          printf '%s\n' \
+            'terraform {' \
+            '  backend "s3" {}' \
+            '}' > backend.tf
+
+      - name: Terraform init
+        run: |
+          if [ -f backend.tf ] && grep -q 'bucket' backend.tf; then
+            terraform init -input=false -no-color -reconfigure
+          elif [ -n "${TF_STATE_BUCKET}" ]; then
+            terraform init -input=false -no-color -reconfigure \
+              -backend-config="bucket=${TF_STATE_BUCKET}" \
+              -backend-config="key=${TF_STATE_KEY}" \
+              -backend-config="region=${TF_STATE_REGION}" \
+              -backend-config="encrypt=true"
+          else
+            echo "::error::No S3 backend configured."
+            exit 1
+          fi
+
+      - name: Download destroy plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: destroy-plan-${{ steps.artifact.outputs.key }}
+          path: ${{ matrix.directory }}
+
+      - name: Terraform destroy (apply approved plan)
+        run: |
+          set -euo pipefail
+          if [ ! -f destroy.tfplan ]; then
+            echo "::error::destroy.tfplan missing after artifact download."
+            ls -la
+            exit 1
+          fi
+          echo "Applying approved destroy plan for ref=${{ needs.discover.outputs.terraform_ref }} dir=${{ matrix.directory }}"
+          terraform apply -input=false -no-color destroy.tfplan
