@@ -1,34 +1,23 @@
-# Destroy AWS resources — clear list first, then checkbox + human approval before delete.
+# Destroy AWS resources from main.
 #
-# Flow:
-#   1) discover
-#   2) plan-destroy → prints a clear table of resources that WILL be deleted
-#   3) If confirm checkboxes are checked → await GitHub Environment approval
-#   4) destroy (apply saved plan)
+# Pipeline:
+#   1) Discover (always main)
+#   2) List resources to delete — TABLE ONLY
+#   3) Checkbox / Environment approval (only if confirm_destroy checked)
+#   4) Destroy
 #
-# How to use safely:
-#   Run 1 (preview): leave BOTH checkboxes unchecked → only lists resources (no delete)
-#   Run 2 (delete):  check both boxes after reviewing the list → approve Environment → destroy
+# Manual:
+#   - Preview: leave confirm_destroy unchecked → table only, no delete
+#   - Delete:  check confirm_destroy → approve Environment "terraform-destroy" → destroy
 #
-# Repo setup (one-time): Settings → Environments → create "terraform-destroy"
-# and add Required reviewers. The await-approval job pauses until a reviewer approves.
+# Repo setup: Settings → Environments → "terraform-destroy" → Required reviewers
 name: Terraform AWS Destroy
 
 on:
   workflow_dispatch:
     inputs:
-      terraform_ref:
-        description: Branch/ref to destroy (main or feature). Leave empty = branch this workflow is run from.
-        required: false
-        type: string
-        default: ""
       confirm_destroy:
-        description: "☑️ CHECK to allow destroy AFTER reviewing the resource list. Unchecked = plan/list only (safe)."
-        required: true
-        type: boolean
-        default: false
-      i_understand_permanent_delete:
-        description: "☑️ CHECK only if you understand listed AWS resources will be permanently deleted."
+        description: "☑️ Delete resources after the list (requires Environment approval). Unchecked = show table only."
         required: true
         type: boolean
         default: false
@@ -39,7 +28,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: terraform-aws-destroy-${{ github.repository }}-${{ inputs.terraform_ref || github.ref_name }}
+  group: terraform-aws-destroy-${{ github.repository }}-main
   cancel-in-progress: false
 
 env:
@@ -48,11 +37,12 @@ env:
   TF_STATE_KEY: ${{ vars.TF_STATE_KEY || format('{0}/terraform.tfstate', github.repository) }}
   TF_STATE_REGION: ${{ vars.TF_STATE_REGION || 'us-east-1' }}
   TF_IN_AUTOMATION: "true"
-  TERRAFORM_REF: ${{ inputs.terraform_ref || github.ref_name }}
+  # Always main — agent UI or manual
+  TERRAFORM_REF: main
 
 jobs:
   discover:
-    name: "1 · Discover Terraform configs"
+    name: "1 · Discover (main)"
     runs-on: ubuntu-latest
     outputs:
       directories: ${{ steps.terraform.outputs.directories }}
@@ -60,62 +50,30 @@ jobs:
       terraform_ref: ${{ steps.ref.outputs.terraform_ref }}
       will_destroy: ${{ steps.mode.outputs.will_destroy }}
     steps:
-      - name: Resolve destroy ref (main or feature branch)
+      - name: Force main branch
         id: ref
         shell: bash
         run: |
           set -euo pipefail
-          REF="${{ inputs.terraform_ref }}"
-          if [ -z "$REF" ]; then
-            REF="${{ github.ref_name }}"
-          fi
-          echo "terraform_ref=$REF" >> "$GITHUB_OUTPUT"
-          echo "Destroy target ref: $REF"
+          echo "terraform_ref=main" >> "$GITHUB_OUTPUT"
+          echo "Destroy always uses branch: main"
 
-      - name: Resolve destroy mode (checkboxes)
+      - name: Resolve checkbox
         id: mode
         shell: bash
         run: |
           set -euo pipefail
           CONFIRM="${{ inputs.confirm_destroy }}"
-          UNDERSTAND="${{ inputs.i_understand_permanent_delete }}"
-          if { [ "$CONFIRM" = "true" ] || [ "$CONFIRM" = "True" ]; } && \
-             { [ "$UNDERSTAND" = "true" ] || [ "$UNDERSTAND" = "True" ]; }; then
+          if [ "$CONFIRM" = "true" ] || [ "$CONFIRM" = "True" ]; then
             echo "will_destroy=true" >> "$GITHUB_OUTPUT"
-            MODE="DESTROY (both checkboxes checked)"
           else
             echo "will_destroy=false" >> "$GITHUB_OUTPUT"
-            MODE="PREVIEW ONLY (list resources — no delete)"
           fi
-          {
-            echo "## Destroy workflow mode"
-            echo ""
-            echo "| Setting | Value |"
-            echo "|---------|-------|"
-            echo "| Branch/ref | \`${{ steps.ref.outputs.terraform_ref }}\` |"
-            echo "| confirm_destroy | \`${{ inputs.confirm_destroy }}\` |"
-            echo "| i_understand_permanent_delete | \`${{ inputs.i_understand_permanent_delete }}\` |"
-            echo "| **Mode** | **${MODE}** |"
-            echo ""
-            if [ "$MODE" = "PREVIEW ONLY (list resources — no delete)" ]; then
-              echo "> Safe preview. Review the **resources to delete** table in the next job."
-              echo "> To delete later: re-run this workflow and **check both boxes**, then approve the Environment."
-            else
-              echo "> ⚠️ Both checkboxes are checked. After the resource list, destroy waits for **Environment approval**."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Check out branch to destroy
+      - name: Check out main
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.ref.outputs.terraform_ref }}
-
-      - name: Show destroy context
-        run: |
-          echo "terraform_ref=${{ steps.ref.outputs.terraform_ref }}"
-          echo "confirm_destroy=${{ inputs.confirm_destroy }}"
-          echo "i_understand_permanent_delete=${{ inputs.i_understand_permanent_delete }}"
-          echo "will_destroy=${{ steps.mode.outputs.will_destroy }}"
+          ref: main
 
       - name: Find Terraform directories
         id: terraform
@@ -142,7 +100,7 @@ jobs:
           fi
 
   plan-destroy:
-    name: "2 · List resources to delete - ${{ matrix.directory }}"
+    name: "2 · Resources to delete - ${{ matrix.directory }}"
     needs: discover
     if: needs.discover.outputs.found == 'true'
     runs-on: ubuntu-latest
@@ -154,7 +112,7 @@ jobs:
       run:
         working-directory: ${{ matrix.directory }}
     steps:
-      - name: Artifact key for this directory
+      - name: Artifact key
         id: artifact
         shell: bash
         run: |
@@ -162,12 +120,11 @@ jobs:
           KEY=$(echo "$DIR" | sed 's#[^A-Za-z0-9._-]#-#g')
           if [ -z "$KEY" ] || [ "$KEY" = "." ]; then KEY="root"; fi
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
-          echo "Artifact key: $KEY"
 
-      - name: Check out branch to destroy
+      - name: Check out main
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.discover.outputs.terraform_ref }}
+          ref: main
 
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
@@ -177,9 +134,6 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           audience: sts.amazonaws.com
 
-      - name: Verify AWS identity
-        run: aws sts get-caller-identity
-
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -188,18 +142,13 @@ jobs:
       - name: Ensure S3 backend
         run: |
           if [ -f backend.tf ] && grep -q 'bucket' backend.tf; then
-            echo "Using backend.tf from branch ${{ needs.discover.outputs.terraform_ref }}."
             exit 0
           fi
           if [ -z "${TF_STATE_BUCKET}" ]; then
-            echo "::error::Set Terraform State S3 Bucket in the agent Settings or GitHub variable TF_STATE_BUCKET."
+            echo "::error::Set TF_STATE_BUCKET (Settings or GitHub variable)."
             exit 1
           fi
-          printf '%s\n' \
-            'terraform {' \
-            '  backend "s3" {}' \
-            '}' > backend.tf
-          echo "Wrote partial backend.tf; init will pass bucket/key/region."
+          printf '%s\n' 'terraform {' '  backend "s3" {}' '}' > backend.tf
 
       - name: Terraform init
         run: |
@@ -217,14 +166,13 @@ jobs:
           fi
 
       - name: Terraform plan destroy
-        id: plan
         run: |
           set -euo pipefail
-          terraform plan -destroy -input=false -no-color -out=destroy.tfplan | tee destroy-plan.txt
-          terraform show -no-color destroy.tfplan | tee destroy-plan-human.txt
+          terraform plan -destroy -input=false -no-color -out=destroy.tfplan > /dev/null
           terraform show -json destroy.tfplan > destroy-plan.json
 
-      - name: Clear table of resources that will be deleted
+      # TABLE ONLY — no extra mode/help text in this step
+      - name: Resources to delete (table)
         id: summary
         shell: bash
         run: |
@@ -234,135 +182,60 @@ jobs:
           import os
           from pathlib import Path
 
-          plan_path = Path("destroy-plan.json")
-          data = json.loads(plan_path.read_text(encoding="utf-8"))
+          data = json.loads(Path("destroy-plan.json").read_text(encoding="utf-8"))
           changes = data.get("resource_changes") or []
 
           rows = []
+          seen = set()
           for rc in changes:
               actions = (rc.get("change") or {}).get("actions") or []
               if "delete" not in actions:
                   continue
-              before = (rc.get("change") or {}).get("before") or {}
-              if not isinstance(before, dict):
-                  before = {}
-              aws_id = (
-                  before.get("id")
-                  or before.get("arn")
-                  or before.get("instance_id")
-                  or ""
-              )
-              name_tag = ""
-              tags = before.get("tags") or before.get("tags_all") or {}
-              if isinstance(tags, dict):
-                  name_tag = tags.get("Name") or tags.get("name") or ""
-              rows.append({
-                  "address": rc.get("address") or "",
-                  "type": rc.get("type") or "",
-                  "name": rc.get("name") or "",
-                  "aws_id": str(aws_id) if aws_id else "",
-                  "name_tag": str(name_tag) if name_tag else "",
-              })
-
-          # de-dupe by address, keep order
-          seen = set()
-          unique_rows = []
-          for r in rows:
-              addr = r["address"]
+              addr = rc.get("address") or ""
               if not addr or addr in seen:
                   continue
               seen.add(addr)
-              unique_rows.append(r)
+              before = (rc.get("change") or {}).get("before") or {}
+              if not isinstance(before, dict):
+                  before = {}
+              aws_id = before.get("id") or before.get("arn") or before.get("instance_id") or ""
+              tags = before.get("tags") or before.get("tags_all") or {}
+              name_tag = ""
+              if isinstance(tags, dict):
+                  name_tag = tags.get("Name") or tags.get("name") or ""
+              rows.append({
+                  "type": rc.get("type") or "",
+                  "address": addr,
+                  "name_tag": str(name_tag) if name_tag else "",
+                  "aws_id": str(aws_id) if aws_id else "",
+              })
 
-          count = len(unique_rows)
-          will_destroy = os.environ.get("WILL_DESTROY", "false").lower() == "true"
-          ref = os.environ.get("TERRAFORM_REF", "")
-          tf_dir = os.environ.get("TF_DIR", ".")
-
-          # Console + step summary
-          print("")
-          print("=" * 72)
-          print(" RESOURCES THAT WILL BE DELETED (terraform destroy plan)")
-          print("=" * 72)
-          print(f" Branch/ref : {ref}")
-          print(f" Directory  : {tf_dir}")
-          print(f" Count      : {count}")
-          print(f" Mode       : {'DESTROY after approval' if will_destroy else 'PREVIEW ONLY (no delete)'}")
-          print("-" * 72)
-          if unique_rows:
-              for i, r in enumerate(unique_rows, 1):
-                  label = r["name_tag"] or r["name"] or "-"
-                  aws = r["aws_id"] or "-"
-                  print(f" {i:3d}. [{r['type']}] {r['address']}")
-                  print(f"       Name/tag: {label}")
-                  print(f"       AWS ID  : {aws}")
-          else:
-              print(" (none — nothing to destroy)")
-          print("=" * 72)
-          if will_destroy:
-              print(" NEXT: Human must APPROVE Environment 'terraform-destroy', then destroy runs.")
-          else:
-              print(" NEXT: Re-run workflow and CHECK both boxes to delete these resources.")
-          print("")
-
-          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          # Markdown table only (job summary + log)
           lines = [
-              "## 🗑️ Resources that will be deleted",
-              "",
-              f"- **Branch/ref:** `{ref}`",
-              f"- **Directory:** `{tf_dir}`",
-              f"- **Resources to destroy:** **{count}**",
-              f"- **Mode:** `{'DESTROY after Environment approval' if will_destroy else 'PREVIEW ONLY — no deletion in this run'}`",
-              "",
+              "| # | Resource type | Terraform address | Name tag | AWS ID |",
+              "|---|---------------|-------------------|----------|--------|",
           ]
-          if unique_rows:
-              lines.append("| # | Resource type | Terraform address | Name tag | AWS ID |")
-              lines.append("|---|---------------|-------------------|----------|--------|")
-              for i, r in enumerate(unique_rows, 1):
+          if rows:
+              for i, r in enumerate(rows, 1):
                   lines.append(
                       f"| {i} | `{r['type']}` | `{r['address']}` | "
                       f"{r['name_tag'] or '—'} | `{r['aws_id'] or '—'}` |"
                   )
-              lines.append("")
-              if will_destroy:
-                  lines.append("### ✅ Checkboxes enabled — next step")
-                  lines.append(
-                      "1. Review this table carefully  \n"
-                      "2. Approve the **terraform-destroy** Environment when prompted  \n"
-                      "3. Destroy job will apply the saved plan"
-                  )
-              else:
-                  lines.append("### ☑️ How to delete these resources")
-                  lines.append(
-                      "This run is **preview only**. To delete:  \n"
-                      "1. Re-run **Terraform AWS Destroy**  \n"
-                      "2. Check **confirm_destroy**  \n"
-                      "3. Check **i_understand_permanent_delete**  \n"
-                      "4. Approve the Environment pause"
-                  )
           else:
-              lines.append("_No resources marked for destroy in this plan._")
+              lines.append("| — | — | _No resources to delete_ | — | — |")
 
-          # Also attach a plain text list as summary appendix for easy copy
-          list_path = Path("resources-to-delete.txt")
-          with list_path.open("w", encoding="utf-8") as fh:
-              fh.write(f"Destroy ref: {ref}\nDirectory: {tf_dir}\nCount: {count}\n\n")
-              for r in unique_rows:
-                  fh.write(
-                      f"{r['type']}\t{r['address']}\t{r['name_tag']}\t{r['aws_id']}\n"
-                  )
+          table = "\n".join(lines) + "\n"
+          Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text(table, encoding="utf-8")
+          print(table)
 
-          summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          with Path("resources-to-delete.txt").open("w", encoding="utf-8") as fh:
+              for r in rows:
+                  fh.write(f"{r['type']}\t{r['address']}\t{r['name_tag']}\t{r['aws_id']}\n")
 
-          out = Path(os.environ["GITHUB_OUTPUT"])
-          with out.open("a", encoding="utf-8") as fh:
-              fh.write(f"has_destroy={'true' if count > 0 else 'false'}\n")
-              fh.write(f"destroy_count={count}\n")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as fh:
+              fh.write(f"has_destroy={'true' if rows else 'false'}\n")
+              fh.write(f"destroy_count={len(rows)}\n")
           PY
-        env:
-          TERRAFORM_REF: ${{ needs.discover.outputs.terraform_ref }}
-          TF_DIR: ${{ matrix.directory }}
-          WILL_DESTROY: ${{ needs.discover.outputs.will_destroy }}
 
       - name: Upload destroy plan artifact
         uses: actions/upload-artifact@v4
@@ -370,15 +243,14 @@ jobs:
           name: destroy-plan-${{ steps.artifact.outputs.key }}
           path: |
             ${{ matrix.directory }}/destroy.tfplan
-            ${{ matrix.directory }}/destroy-plan.txt
-            ${{ matrix.directory }}/destroy-plan-human.txt
             ${{ matrix.directory }}/destroy-plan.json
             ${{ matrix.directory }}/resources-to-delete.txt
           if-no-files-found: error
           retention-days: 5
 
-  await-human-approval:
-    name: "3 · Checkbox + Environment approval"
+  # Mid-pipeline "checkbox": Environment approval pause (only when confirm_destroy is checked)
+  confirm-delete:
+    name: "3 · ☑️ Confirm delete"
     needs: [discover, plan-destroy]
     if: |
       always() &&
@@ -386,52 +258,21 @@ jobs:
       needs.discover.outputs.will_destroy == 'true' &&
       needs.plan-destroy.result == 'success'
     runs-on: ubuntu-latest
-    # Pauses until a required reviewer approves in GitHub Environment "terraform-destroy"
     environment:
       name: terraform-destroy
     steps:
-      - name: Confirm checkboxes before Environment wait
-        run: |
-          set -euo pipefail
-          echo "confirm_destroy=${{ inputs.confirm_destroy }}"
-          echo "i_understand_permanent_delete=${{ inputs.i_understand_permanent_delete }}"
-          if [ "${{ inputs.confirm_destroy }}" != "true" ] || [ "${{ inputs.i_understand_permanent_delete }}" != "true" ]; then
-            echo "::error::Both destroy checkboxes must be checked. Refusing to proceed."
-            exit 1
-          fi
-          {
-            echo "## ⏳ Waiting for Environment approval"
-            echo ""
-            echo "Both workflow checkboxes were checked:"
-            echo "- ✅ confirm_destroy"
-            echo "- ✅ i_understand_permanent_delete"
-            echo ""
-            echo "Review the **List resources to delete** job summary, then approve Environment **terraform-destroy**."
-            echo ""
-            echo "- **Branch/ref:** \`${{ needs.discover.outputs.terraform_ref }}\`"
-            echo "- **Requested by:** \`${{ github.actor }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "Checkboxes OK. Waiting for Environment approval (if required reviewers are configured)..."
-
-      - name: Approval recorded
-        run: |
-          {
-            echo "## ✅ Human approval granted — destroy will run next"
-            echo ""
-            echo "- **Branch/ref:** \`${{ needs.discover.outputs.terraform_ref }}\`"
-            echo "- **Approved path for:** \`${{ github.actor }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "Approval received. Proceeding to terraform destroy."
+      - name: Confirmed
+        run: echo "Delete confirmed. Proceeding to destroy on main."
 
   destroy:
-    name: "4 · Destroy AWS resources - ${{ matrix.directory }}"
-    needs: [discover, plan-destroy, await-human-approval]
+    name: "4 · Destroy - ${{ matrix.directory }}"
+    needs: [discover, plan-destroy, confirm-delete]
     if: |
       always() &&
       needs.discover.outputs.found == 'true' &&
       needs.discover.outputs.will_destroy == 'true' &&
       needs.plan-destroy.result == 'success' &&
-      needs.await-human-approval.result == 'success'
+      needs.confirm-delete.result == 'success'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -441,7 +282,7 @@ jobs:
       run:
         working-directory: ${{ matrix.directory }}
     steps:
-      - name: Artifact key for this directory
+      - name: Artifact key
         id: artifact
         shell: bash
         run: |
@@ -450,10 +291,10 @@ jobs:
           if [ -z "$KEY" ] || [ "$KEY" = "." ]; then KEY="root"; fi
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
 
-      - name: Check out branch to destroy
+      - name: Check out main
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.discover.outputs.terraform_ref }}
+          ref: main
 
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
@@ -463,9 +304,6 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           audience: sts.amazonaws.com
 
-      - name: Verify AWS identity
-        run: aws sts get-caller-identity
-
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -474,17 +312,13 @@ jobs:
       - name: Ensure S3 backend
         run: |
           if [ -f backend.tf ] && grep -q 'bucket' backend.tf; then
-            echo "Using backend.tf from branch ${{ needs.discover.outputs.terraform_ref }}."
             exit 0
           fi
           if [ -z "${TF_STATE_BUCKET}" ]; then
-            echo "::error::Set Terraform State S3 Bucket in Settings or TF_STATE_BUCKET variable."
+            echo "::error::Set TF_STATE_BUCKET."
             exit 1
           fi
-          printf '%s\n' \
-            'terraform {' \
-            '  backend "s3" {}' \
-            '}' > backend.tf
+          printf '%s\n' 'terraform {' '  backend "s3" {}' '}' > backend.tf
 
       - name: Terraform init
         run: |
@@ -507,34 +341,12 @@ jobs:
           name: destroy-plan-${{ steps.artifact.outputs.key }}
           path: ${{ matrix.directory }}
 
-      - name: Show delete list again before apply
-        run: |
-          set -euo pipefail
-          echo "Re-printing resources-to-delete.txt before apply:"
-          if [ -f resources-to-delete.txt ]; then
-            cat resources-to-delete.txt
-          else
-            echo "(list file missing — continuing with saved destroy.tfplan)"
-          fi
-
-      - name: Terraform destroy (apply approved plan)
+      - name: Terraform destroy
         run: |
           set -euo pipefail
           if [ ! -f destroy.tfplan ]; then
-            echo "::error::destroy.tfplan missing after artifact download."
+            echo "::error::destroy.tfplan missing."
             ls -la
             exit 1
           fi
-          echo "Applying approved destroy plan for ref=${{ needs.discover.outputs.terraform_ref }} dir=${{ matrix.directory }}"
           terraform apply -input=false -no-color destroy.tfplan
-
-      - name: Destroy complete summary
-        if: success()
-        run: |
-          {
-            echo "## 💥 Destroy completed"
-            echo ""
-            echo "- **Branch/ref:** \`${{ needs.discover.outputs.terraform_ref }}\`"
-            echo "- **Directory:** \`${{ matrix.directory }}\`"
-            echo "- Saved plan applied successfully."
-          } >> "$GITHUB_STEP_SUMMARY"
