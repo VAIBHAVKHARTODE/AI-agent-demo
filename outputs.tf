@@ -10,10 +10,10 @@ output "bucket_arn" {
 
 output "kms_key_arn" {
   description = "The ARN of the KMS key used for bucket encryption"
-  value       = module.kms_key.key_arn
+  value       = module.s3_kms_key.key_arn
 }
 
 output "kms_key_id" {
   description = "The ID of the KMS key used for bucket encryption"
-  value       = module.kms_key.key_id
+  value       = module.s3_kms_key.key_id
 }
