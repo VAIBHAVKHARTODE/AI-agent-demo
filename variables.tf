@@ -23,13 +23,13 @@ variable "instance_type" {
 }
 
 variable "root_volume_size" {
-  description = "Root EBS volume size in GB (minimum 30)"
+  description = "Root volume size in GB (minimum 30 GB)"
   type        = number
   default     = 30
 }
 
 variable "ssh_ingress_cidr" {
-  description = "CIDR block allowed to SSH into the instance (POC only, restrict in production)"
+  description = "CIDR block allowed to SSH into the instance (POC only - open to all)"
   type        = string
   default     = "0.0.0.0/0"
 }
@@ -38,8 +38,12 @@ variable "tags" {
   description = "Common tags applied to all resources"
   type        = map(string)
   default = {
-    Project     = "vaibhavaipoc"
     Environment = "dev"
+    Project     = "vaibhavaipoc"
+    Owner       = "platform-team"
+    CostCenter  = "poc"
     ManagedBy   = "terraform"
+    Terraform   = "true"
+    BusinessUnit = "engineering"
   }
 }
