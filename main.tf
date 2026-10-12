@@ -2,47 +2,38 @@ module "ec2_sg" {
   source  = "terraform-aws-modules/security-group/aws"
   version = "~> 5.0"
 
-  name        = "${var.project_name}-sg"
-  description = "Security group for ${var.project_name} EC2 instance - allows SSH only"
-  vpc_id      = data.aws_vpc.default.id
+  name            = "${var.project_name}-sg"
+  use_name_prefix = false
+  description     = "Security group for ${var.project_name} EC2 instance - SSH only"
+  vpc_id          = data.aws_vpc.default.id
 
   ingress_with_cidr_blocks = [
     {
       from_port   = 22
       to_port     = 22
-      protocol    = "tcp"
-      description = "SSH access (POC - restrict in production)"
+      ip_protocol = "tcp"
+      description = "SSH access"
       cidr_blocks = var.ssh_ingress_cidr
     }
   ]
 
-  egress_with_cidr_blocks = [
-    {
-      from_port   = 0
-      to_port     = 0
-      protocol    = "-1"
-      description = "Allow all outbound traffic"
-      cidr_blocks = "0.0.0.0/0"
-    }
-  ]
+  egress_rules = ["all-all"]
 
-  tags = merge(
-    var.tags,
-    {
-      Name = "${var.project_name}-sg"
-    }
-  )
+  tags = merge(var.tags, {
+    Name = "${var.project_name}-sg"
+  })
 }
 
-module "ec2_instance" {
+module "ec2" {
   source  = "terraform-aws-modules/ec2-instance/aws"
   version = "~> 6.0"
 
   name = var.project_name
 
-  ami                    = data.aws_ami.amazon_linux_2023.id
+  ami                    = data.aws_ami.al2023.id
   instance_type           = var.instance_type
-  subnet_id               = element(data.aws_subnets.default.ids, 0)
+  subnet_id               = data.aws_subnets.default.ids[0]
+  create_security_group   = false
   vpc_security_group_ids  = [module.ec2_sg.security_group_id]
 
   root_block_device = {
@@ -51,10 +42,8 @@ module "ec2_instance" {
       encrypted   = true
     }
 
-  tags = merge(
-    var.tags,
-    {
-      Name = var.project_name
-    }
-  )
+  tags = merge(var.tags, {
+    Name    = var.project_name
+    Project = var.project_name
+  })
 }
