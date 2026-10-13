@@ -1,0 +1,35 @@
+variable "aws_region" {
+  description = "AWS region to deploy resources into"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "project_name" {
+  description = "Project name used for tagging and resource naming"
+  type        = string
+  default     = "vaibhavaipoc"
+}
+
+variable "environment" {
+  description = "Environment name (dev, test, qa, uat, stage, prod)"
+  type        = string
+  default     = "dev"
+}
+
+variable "instance_type" {
+  description = "EC2 instance type"
+  type        = string
+  default     = "t3.micro"
+}
+
+variable "root_volume_size" {
+  description = "Root EBS volume size in GB (minimum 30)"
+  type        = number
+  default     = 30
+}
+
+variable "allowed_ssh_cidr" {
+  description = "CIDR block allowed to SSH into the instance (POC uses 0.0.0.0/0)"
+  type        = string
+  default     = "0.0.0.0/0"
+}
