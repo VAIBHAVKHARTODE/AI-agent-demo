@@ -18,7 +18,7 @@ output "security_group_id" {
   value       = module.ec2_sg.security_group_id
 }
 
-output "default_vpc_id" {
-  description = "ID of the default VPC used"
-  value       = data.aws_vpc.default.id
+output "ami_id" {
+  description = "AMI ID used for the EC2 instance"
+  value       = data.aws_ami.al2023.id
 }
