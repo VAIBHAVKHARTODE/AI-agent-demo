@@ -29,20 +29,7 @@ variable "root_volume_size" {
 }
 
 variable "ssh_ingress_cidr" {
-  description = "CIDR block allowed to SSH into the instance (POC only - open to 0.0.0.0/0)"
+  description = "CIDR block allowed to SSH into the instance (POC only - open to all)"
   type        = string
   default     = "0.0.0.0/0"
-}
-
-variable "tags" {
-  description = "Common tags applied to all resources"
-  type        = map(string)
-  default = {
-    Project     = "vaibhavaipoc"
-    Environment = "dev"
-    ManagedBy   = "terraform"
-    Owner       = "platform-team"
-    CostCenter  = "shared"
-    BusinessUnit = "engineering"
-  }
 }
