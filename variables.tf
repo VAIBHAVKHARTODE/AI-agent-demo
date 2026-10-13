@@ -5,13 +5,13 @@ variable "aws_region" {
 }
 
 variable "project_name" {
-  description = "Project name used for tagging and naming resources"
+  description = "Project name used for tagging and naming"
   type        = string
   default     = "vaibhavaipoc"
 }
 
 variable "environment" {
-  description = "Environment name (dev, test, qa, uat, stage, prod)"
+  description = "Environment name"
   type        = string
   default     = "dev"
 }
@@ -23,13 +23,13 @@ variable "instance_type" {
 }
 
 variable "root_volume_size" {
-  description = "Root EBS volume size in GB (minimum 30 GB)"
+  description = "Root EBS volume size in GB (minimum 30)"
   type        = number
   default     = 30
 }
 
 variable "ssh_ingress_cidr" {
-  description = "CIDR block allowed to SSH into the instance (POC only, restrict to your IP in production)"
+  description = "CIDR block allowed to SSH into the instance (POC: open to all)"
   type        = string
   default     = "0.0.0.0/0"
 }
@@ -38,11 +38,8 @@ variable "tags" {
   description = "Common tags applied to all resources"
   type        = map(string)
   default = {
-    Environment = "dev"
     Project     = "vaibhavaipoc"
-    Owner       = "platform-team"
-    CostCenter  = "default"
+    Environment = "dev"
     ManagedBy   = "terraform"
-    BusinessUnit = "default"
   }
 }
