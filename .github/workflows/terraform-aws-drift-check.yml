@@ -1,0 +1,283 @@
+# Drift Detection — Terraform plan only (no apply).
+#
+# Triggered by the agent Drift page "Trigger Plan Drift Check" button
+# (workflow_dispatch on main). Compares main's .tf against remote state via OIDC.
+# Does NOT apply changes — use Deploy / Modify Deploy for apply.
+name: Terraform AWS Drift Check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-aws-drift-check-${{ github.repository }}-main
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  TF_STATE_KEY: ${{ vars.TF_STATE_KEY || format('{0}/terraform.tfstate', github.repository) }}
+  TF_STATE_REGION: ${{ vars.TF_STATE_REGION || 'us-east-1' }}
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  discover:
+    name: "1 · Discover (drift check)"
+    runs-on: ubuntu-latest
+    outputs:
+      directories: ${{ steps.terraform.outputs.directories }}
+      found: ${{ steps.terraform.outputs.found }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Show drift ref
+        run: |
+          echo "deploy_branch=main (drift check always uses main)"
+          echo "checked_out_sha=$(git rev-parse HEAD)"
+          git log -1 --oneline
+
+      - name: Find Terraform directories
+        id: terraform
+        shell: bash
+        run: |
+          if ls ./*.tf >/dev/null 2>&1; then
+            directories='["."]'
+          else
+            directories=$(find . -type f -name '*.tf' \
+              -not -path '*/.terraform/*' \
+              -not -path './.git/*' \
+              -printf '%h\n' |
+              sed 's|^\./||' |
+              sort -u |
+              jq -R -s -c 'split("\n") | map(select(length > 0)) | map(if . == "" then "." else . end)')
+          fi
+          echo "directories=$directories" >> "$GITHUB_OUTPUT"
+          if [ "$directories" = "[]" ] || [ -z "$directories" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  plan:
+    name: "2 · Drift plan - ${{ matrix.directory }}"
+    needs: discover
+    if: needs.discover.outputs.found == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: ${{ fromJSON(needs.discover.outputs.directories) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: terraform-drift-check
+          aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Ensure S3 backend
+        run: |
+          if [ -f backend.tf ] && grep -q 'bucket' backend.tf; then
+            echo "Using backend.tf from the repo."
+            exit 0
+          fi
+          if [ -z "${TF_STATE_BUCKET}" ]; then
+            echo "::error::Set TF_STATE_BUCKET (agent Settings or GitHub variable)."
+            exit 1
+          fi
+          printf '%s\n' \
+            'terraform {' \
+            '  backend "s3" {}' \
+            '}' > backend.tf
+
+      - name: Terraform init
+        run: |
+          if [ -f backend.tf ] && grep -q 'bucket' backend.tf; then
+            terraform init -input=false -no-color -reconfigure
+          else
+            terraform init -input=false -no-color -reconfigure \
+              -backend-config="bucket=${TF_STATE_BUCKET}" \
+              -backend-config="key=${TF_STATE_KEY}" \
+              -backend-config="region=${TF_STATE_REGION}" \
+              -backend-config="encrypt=true"
+          fi
+
+      - name: Terraform plan (drift check — no apply)
+        id: plan
+        run: |
+          set +e
+          terraform plan -input=false -no-color -detailed-exitcode -out=tfplan 2>&1 | tee plan.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "plan_exit=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -eq 1 ]; then
+            echo "::error::terraform plan failed"
+            exit 1
+          fi
+          # Exit 0 = no drift; exit 2 = drift present. Both are success for this workflow.
+          terraform show -json tfplan > plan.json
+          python - <<'PY'
+          import json
+
+          def fmt(v):
+              if v is None:
+                  return "null"
+              if isinstance(v, (dict, list)):
+                  try:
+                      return json.dumps(v, sort_keys=True, default=str)
+                  except Exception:
+                      return str(v)
+              return str(v)
+
+          def flatten(prefix, value, out):
+              if isinstance(value, dict):
+                  if not value:
+                      out[prefix] = {}
+                      return
+                  for k, v in value.items():
+                      path = f"{prefix}.{k}" if prefix else str(k)
+                      flatten(path, v, out)
+                  return
+              if isinstance(value, list):
+                  if not value:
+                      out[prefix] = []
+                      return
+                  if all(not isinstance(i, (dict, list)) for i in value):
+                      out[prefix] = value
+                      return
+                  for idx, item in enumerate(value):
+                      flatten(f"{prefix}[{idx}]", item, out)
+                  return
+              out[prefix] = value
+
+          def attr_changes(change):
+              before = change.get("before") if isinstance(change.get("before"), dict) else {}
+              after = change.get("after") if isinstance(change.get("after"), dict) else {}
+              after_unknown = change.get("after_unknown") if isinstance(change.get("after_unknown"), dict) else {}
+              fb, fa, fu = {}, {}, {}
+              flatten("", before, fb)
+              flatten("", after, fa)
+              flatten("", after_unknown, fu)
+              diffs = []
+              for path in sorted(set(fb) | set(fa) | set(fu)):
+                  if not path:
+                      continue
+                  # Prefer tag / name / type fields; still include other scalar diffs.
+                  bv = fb[path] if path in fb else None
+                  av = fa[path] if path in fa else None
+                  missing_b = path not in fb
+                  missing_a = path not in fa
+                  unknown = fu.get(path)
+                  is_unknown = unknown is True or (isinstance(unknown, (dict, list)) and bool(unknown))
+                  if missing_b and missing_a and not is_unknown:
+                      continue
+                  if not missing_b and not missing_a and bv == av and not is_unknown:
+                      continue
+                  after_display = "(known after apply)" if is_unknown and (missing_a or bv == av) else fmt(av)
+                  diffs.append({
+                      "attribute": path,
+                      "before": fmt(None if missing_b else bv),
+                      "after": after_display,
+                  })
+              return diffs
+
+          with open("plan.json", "r", encoding="utf-8") as f:
+              plan = json.load(f)
+          resources = []
+          counts = {"add": 0, "change": 0, "destroy": 0}
+          for rc in plan.get("resource_changes") or []:
+              change = rc.get("change") or {}
+              actions = change.get("actions") or []
+              if not actions or actions == ["no-op"] or actions == ["read"]:
+                  continue
+              action = "update"
+              if actions == ["create"]:
+                  action = "create"
+                  counts["add"] += 1
+              elif actions == ["delete"]:
+                  action = "delete"
+                  counts["destroy"] += 1
+              elif "create" in actions and "delete" in actions:
+                  action = "replace"
+                  counts["add"] += 1
+                  counts["destroy"] += 1
+              else:
+                  counts["change"] += 1
+              resources.append({
+                  "address": rc.get("address") or "",
+                  "type": rc.get("type") or "",
+                  "name": rc.get("name") or "",
+                  "actions": actions,
+                  "action": action,
+                  "diffs": attr_changes(change),
+              })
+          summary = (
+              f"Plan: {counts['add']} to add, {counts['change']} to change, "
+              f"{counts['destroy']} to destroy."
+          )
+          out = {
+              "ok": True,
+              "has_drift": (counts["add"] + counts["change"] + counts["destroy"]) > 0 or len(resources) > 0,
+              "auth_mode": "oidc",
+              "summary": summary,
+              "counts": counts,
+              "plan_counts": counts,
+              "resources": resources,
+          }
+          with open("plan-summary.json", "w", encoding="utf-8") as f:
+              json.dump(out, f, indent=2)
+          print(summary)
+          print(f"Drift resources: {len(resources)}")
+          if out["has_drift"]:
+              print("DRIFT_DETECTED=true")
+          else:
+              print("DRIFT_DETECTED=false")
+              print("No changes. Infrastructure matches configuration on main.")
+          PY
+          {
+            echo "## Drift check — Terraform plan on \`main\` (\`${{ matrix.directory }}\`)"
+            echo ""
+            if [ "$code" -eq 0 ]; then
+              echo "No drift — plan reported no infrastructure changes."
+            else
+              echo "Drift detected — plan has changes (apply was NOT run)."
+              echo ""
+              echo '```hcl'
+              grep -E '^(Plan:|# )|\sto (add|change|destroy)|[~+\-] ' plan.txt | head -n 200 || true
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload drift plan artifact for agent
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-check-plan-${{ strategy.job-index }}
+          path: |
+            ${{ matrix.directory }}/plan-summary.json
+            ${{ matrix.directory }}/plan.txt
+            ${{ matrix.directory }}/plan.json
+          if-no-files-found: warn
+          retention-days: 1
