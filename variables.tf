@@ -1,4 +1,3 @@
-
 variable "aws_region" {
   description = "AWS region to deploy resources into"
   type        = string
@@ -6,13 +5,13 @@ variable "aws_region" {
 }
 
 variable "project_name" {
-  description = "Project name used for tagging and naming"
+  description = "Project name used for tagging and naming resources"
   type        = string
-  default     = "Manas-Instance"
+  default     = "vaibhavaipoc"
 }
 
 variable "environment" {
-  description = "Environment name"
+  description = "Environment name (dev, test, qa, uat, stage, prod)"
   type        = string
   default     = "dev"
 }
@@ -24,27 +23,13 @@ variable "instance_type" {
 }
 
 variable "root_volume_size" {
-  description = "Root volume size in GB (minimum 30)"
+  description = "Root EBS volume size in GB (minimum 30 GB)"
   type        = number
   default     = 30
 }
 
 variable "ssh_ingress_cidr" {
-  description = "CIDR block allowed to SSH into the instance (POC - open to all)"
+  description = "CIDR block allowed to SSH into the instance (POC only - restrict in real usage)"
   type        = string
   default     = "0.0.0.0/0"
-}
-
-variable "tags" {
-  description = "Common tags applied to all resources"
-  type        = map(string)
-  default = {
-    Environment = "dev"
-    Project     = "vaibhavaipoc"
-    Owner       = "platform-team"
-    CostCenter  = "poc"
-    ManagedBy   = "terraform"
-    BusinessUnit = "engineering"
-    Product     = "ManasAIPOC"
-  }
 }
