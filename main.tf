@@ -20,7 +20,7 @@ module "ec2_sg" {
   egress_rules = ["all-all"]
 
   tags = merge(
-    var.tags,
+    local.common_tags,
     {
       Name = "${var.project_name}-sg"
     }
@@ -35,7 +35,7 @@ module "ec2" {
 
   ami                    = data.aws_ami.al2023.id
   instance_type          = var.instance_type
-  subnet_id              = element(tolist(data.aws_subnets.default.ids), 0)
+  subnet_id              = data.aws_subnets.default.ids[0]
   create_security_group  = false
   vpc_security_group_ids = [module.ec2_sg.security_group_id]
 
@@ -46,10 +46,9 @@ module "ec2" {
     }
 
   tags = merge(
-    var.tags,
+    local.common_tags,
     {
-      Name    = var.project_name
-      Project = var.project_name
+      Name = var.project_name
     }
   )
 }
