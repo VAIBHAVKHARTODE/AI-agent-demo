@@ -1,7 +1,8 @@
 # Modify Infra — Deploy via Pipeline (plan + apply).
 #
-# Triggered by the agent "Deploy via Pipeline" button (always workflow_dispatch
-# on main). Applies infrastructure changes from the default branch.
+# ALWAYS runs against the repository default branch (main).
+# Triggered by the agent "Deploy via Pipeline" button via workflow_dispatch.
+# Feature / PR branches are never used for apply.
 name: Terraform AWS Modify Deploy
 
 on:
@@ -12,10 +13,12 @@ permissions:
   id-token: write
 
 concurrency:
-  group: terraform-aws-modify-deploy-${{ github.repository }}
+  group: terraform-aws-modify-deploy-${{ github.repository }}-main
   cancel-in-progress: false
 
 env:
+  # Unconditional: always deploy code from main (ignore dispatch ref / feature branches).
+  DEPLOY_BRANCH: main
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
   TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
   TF_STATE_KEY: ${{ vars.TF_STATE_KEY || format('{0}/terraform.tfstate', github.repository) }}
@@ -24,22 +27,39 @@ env:
 
 jobs:
   discover:
-    name: "1 · Discover (modify deploy)"
+    name: "1 · Discover (main)"
     runs-on: ubuntu-latest
     outputs:
       directories: ${{ steps.terraform.outputs.directories }}
       found: ${{ steps.terraform.outputs.found }}
+      deploy_branch: ${{ steps.ref.outputs.deploy_branch }}
     steps:
-      - name: Check out dispatched branch
+      - name: Resolve deploy branch (always main)
+        id: ref
+        shell: bash
+        run: |
+          # Prefer repo default_branch, but Terraform Agent always deploys main.
+          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+          DEPLOY_BRANCH="main"
+          if [ -n "$DEFAULT_BRANCH" ] && [ "$DEFAULT_BRANCH" != "main" ]; then
+            echo "::notice::Repo default_branch is '$DEFAULT_BRANCH'; agent still deploys 'main'."
+          fi
+          echo "deploy_branch=$DEPLOY_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "Deploy branch (unconditional): $DEPLOY_BRANCH"
+
+      - name: Check out main
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: main
 
       - name: Show deploy ref
         run: |
-          echo "github.ref=${{ github.ref }}"
-          echo "github.ref_name=${{ github.ref_name }}"
-          echo "github.sha=${{ github.sha }}"
+          echo "deploy_branch=main"
+          echo "github.ref=${{ github.ref }} (dispatch ref — ignored)"
+          echo "github.sha (dispatch)=${{ github.sha }}"
+          echo "checked_out_sha=$(git rev-parse HEAD)"
+          echo "checked_out_branch=$(git rev-parse --abbrev-ref HEAD || true)"
+          git log -1 --oneline
 
       - name: Find Terraform directories
         id: terraform
@@ -64,7 +84,7 @@ jobs:
           fi
 
   deploy:
-    name: "2 · Deploy - ${{ matrix.directory }}"
+    name: "2 · Deploy main - ${{ matrix.directory }}"
     needs: discover
     if: needs.discover.outputs.found == 'true'
     runs-on: ubuntu-latest
@@ -76,16 +96,16 @@ jobs:
       run:
         working-directory: ${{ matrix.directory }}
     steps:
-      - name: Check out dispatched branch
+      - name: Check out main
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: main
 
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: terraform-modify-deploy
+          role-session-name: terraform-modify-deploy-main
           aws-region: ${{ env.AWS_REGION }}
           audience: sts.amazonaws.com
 
@@ -127,9 +147,10 @@ jobs:
             exit 1
           fi
 
-      - name: Terraform plan
+      - name: Terraform plan (from main)
         id: plan
         run: |
+          echo "Planning against checked-out main ($(git rev-parse --short HEAD))"
           set +e
           terraform plan -input=false -no-color -detailed-exitcode -out=tfplan 2>&1 | tee plan.txt
           code=${PIPESTATUS[0]}
@@ -140,12 +161,12 @@ jobs:
             exit 1
           fi
           {
-            echo "## Modify deploy — Terraform plan (\`${{ matrix.directory }}\`)"
+            echo "## Modify deploy — Terraform plan on \`main\` (\`${{ matrix.directory }}\`)"
             echo ""
             if [ "$code" -eq 0 ]; then
-              echo "No infrastructure changes — apply will be skipped."
+              echo "No infrastructure changes on main — apply will be skipped."
             else
-              echo "Plan has changes — apply will run."
+              echo "Plan has changes on main — apply will run."
               echo ""
               echo '```hcl'
               grep -E '^(Plan:|# )|\sto (add|change|destroy)' plan.txt | head -n 80 || true
@@ -153,15 +174,16 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Terraform apply
+      - name: Terraform apply (main)
         if: steps.plan.outputs.plan_exit == '2'
         timeout-minutes: 30
         run: |
-          echo "Applying modify changes with OIDC credentials..."
+          echo "Applying modify changes from main with OIDC credentials..."
           terraform apply -input=false -no-color -auto-approve tfplan
-          echo "## Apply complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Apply complete (main)" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Skip apply (no changes)
+      - name: Skip apply (no changes on main)
         if: steps.plan.outputs.plan_exit == '0'
         run: |
-          echo "Plan reported no changes — skipped terraform apply."
+          echo "Plan on main reported no changes — skipped terraform apply."
+          echo "If you expected AWS updates, ensure Deploy pushed Analyze changes to main before this workflow ran."
