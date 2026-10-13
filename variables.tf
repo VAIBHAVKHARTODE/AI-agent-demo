@@ -1,4 +1,3 @@
-
 variable "aws_region" {
   description = "AWS region to deploy resources into"
   type        = string
@@ -8,7 +7,7 @@ variable "aws_region" {
 variable "project_name" {
   description = "Project name used for tagging and naming"
   type        = string
-  default     = "my-instance"
+  default     = "vaibhavaipoc"
 }
 
 variable "environment" {
@@ -39,12 +38,11 @@ variable "tags" {
   description = "Common tags applied to all resources"
   type        = map(string)
   default = {
-    Environment  = "dev"
-    Project      = "vaibhavaipoc"
-    Owner        = "platform-team"
-    CostCenter   = "poc"
-    ManagedBy    = "terraform"
+    Environment = "dev"
+    Project     = "vaibhavaipoc"
+    Owner       = "platform-team"
+    CostCenter  = "poc"
+    ManagedBy   = "terraform"
     BusinessUnit = "engineering"
-    Product      = "myNewAi"
   }
 }
