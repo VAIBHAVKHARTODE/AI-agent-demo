@@ -1,0 +1,208 @@
+# Modify Infra — GitHub plan review (plan only, no apply).
+#
+# NOTE: Analyze & Modify in the agent does NOT use this workflow and does NOT
+# create a PR. It runs terraform plan locally and shows results in the UI.
+#
+# This workflow runs only when a PR is opened/updated (Create PR Only) so
+# reviewers can see the plan on GitHub before Deploy via Pipeline.
+name: Terraform AWS Modify Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "**.tf"
+      - "**.tfvars"
+      - ".github/workflows/terraform-aws-modify-review.yml"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or SHA to plan (default = current ref)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: terraform-aws-modify-review-${{ github.repository }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  TF_STATE_KEY: ${{ vars.TF_STATE_KEY || format('{0}/terraform.tfstate', github.repository) }}
+  TF_STATE_REGION: ${{ vars.TF_STATE_REGION || 'us-east-1' }}
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  discover:
+    name: "1 · Discover (modify review)"
+    runs-on: ubuntu-latest
+    outputs:
+      directories: ${{ steps.terraform.outputs.directories }}
+      found: ${{ steps.terraform.outputs.found }}
+      checkout_ref: ${{ steps.ref.outputs.checkout_ref }}
+    steps:
+      - name: Resolve checkout ref
+        id: ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.ref }}" ]; then
+            echo "checkout_ref=${{ inputs.ref }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "checkout_ref=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "checkout_ref=${{ github.ref }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.checkout_ref }}
+
+      - name: Find Terraform directories
+        id: terraform
+        shell: bash
+        run: |
+          if ls ./*.tf >/dev/null 2>&1; then
+            directories='["."]'
+          else
+            directories=$(find . -type f -name '*.tf' \
+              -not -path '*/.terraform/*' \
+              -not -path './.git/*' \
+              -printf '%h\n' |
+              sed 's|^\./||' |
+              sort -u |
+              jq -R -s -c 'split("\n") | map(select(length > 0)) | map(if . == "" then "." else . end)')
+          fi
+          echo "directories=$directories" >> "$GITHUB_OUTPUT"
+          if [ "$directories" = "[]" ] || [ -z "$directories" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  plan:
+    name: "2 · Review plan - ${{ matrix.directory }}"
+    needs: discover
+    if: needs.discover.outputs.found == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: ${{ fromJSON(needs.discover.outputs.directories) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.discover.outputs.checkout_ref }}
+
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: terraform-modify-review
+          aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Ensure S3 backend
+        run: |
+          if [ -f backend.tf ] && grep -q 'bucket' backend.tf; then
+            echo "Using backend.tf from the repo."
+            exit 0
+          fi
+          if [ -z "${TF_STATE_BUCKET}" ]; then
+            echo "::error::Set TF_STATE_BUCKET (agent Settings or GitHub variable)."
+            exit 1
+          fi
+          printf '%s\n' \
+            'terraform {' \
+            '  backend "s3" {}' \
+            '}' > backend.tf
+
+      - name: Terraform init
+        run: |
+          if [ -f backend.tf ] && grep -q 'bucket' backend.tf; then
+            terraform init -input=false -no-color -reconfigure
+          else
+            terraform init -input=false -no-color -reconfigure \
+              -backend-config="bucket=${TF_STATE_BUCKET}" \
+              -backend-config="key=${TF_STATE_KEY}" \
+              -backend-config="region=${TF_STATE_REGION}" \
+              -backend-config="encrypt=true"
+          fi
+
+      - name: Terraform plan (review only — no apply)
+        id: plan
+        run: |
+          set +e
+          terraform plan -input=false -no-color -detailed-exitcode -out=tfplan 2>&1 | tee plan.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "plan_exit=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -eq 1 ]; then
+            echo "::error::terraform plan failed"
+            exit 1
+          fi
+          {
+            echo "## Modify review — Terraform plan (\`${{ matrix.directory }}\`)"
+            echo ""
+            if [ "$code" -eq 0 ]; then
+              echo "No infrastructure changes."
+            else
+              echo "Plan has changes (review before Deploy via Pipeline)."
+              echo ""
+              echo '```hcl'
+              # Prefer human-readable summary lines
+              grep -E '^(Plan:|# |  # |~|\+|-)|\sto (add|change|destroy)' plan.txt | head -n 200 || true
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: modify-review-plan-${{ strategy.job-index }}
+          path: |
+            ${{ matrix.directory }}/tfplan
+            ${{ matrix.directory }}/plan.txt
+          if-no-files-found: warn
+          retention-days: 5
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const dir = '${{ matrix.directory }}';
+            let body = '## Modify Infra — plan review (`' + dir + '`)\n\n';
+            body += '_Plan only — no apply. Use **Deploy via Pipeline** in the agent to apply._\n\n';
+            try {
+              const txt = fs.readFileSync(dir === '.' ? 'plan.txt' : dir + '/plan.txt', 'utf8');
+              const lines = txt.split('\n').filter(l =>
+                /Plan:|# .* will be|^\s*[~+-]/.test(l) || /to (add|change|destroy)/.test(l)
+              ).slice(0, 120);
+              body += '```hcl\n' + (lines.join('\n') || '(see workflow logs)') + '\n```\n';
+            } catch (e) {
+              body += '_Could not read plan.txt — see Actions logs._\n';
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
