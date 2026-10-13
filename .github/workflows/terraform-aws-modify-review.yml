@@ -1,17 +1,18 @@
-# Modify Infra — optional GitHub plan review (plan only, no apply).
+# Modify Infra — Terraform plan review via GitHub OIDC (plan only, no apply).
 #
-# IMPORTANT:
-# - Analyze & Modify in the agent does NOT trigger this workflow.
-# - Analyze runs terraform plan locally and shows files/resources in the UI.
-# - This workflow is manual only (workflow_dispatch) if you want a plan on GitHub.
-# - Create PR Only does not auto-start this workflow either.
+# Used by:
+# - Agent "Analyze & Modify" when OIDC Role ARN is configured (local AWS keys
+#   cannot assume the GitHub OIDC role; plan runs here instead).
+# - Manual workflow_dispatch from the Actions tab.
+#
+# Does NOT apply changes. Deploy via Pipeline uses terraform-aws-modify-deploy.yml.
 name: Terraform AWS Modify Review
 
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Optional override ref (default = branch you run the workflow on)"
+        description: "Git ref with proposed Terraform changes (branch/SHA). Empty = dispatch ref."
         required: false
         type: string
         default: ""
@@ -104,6 +105,9 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           audience: sts.amazonaws.com
 
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -148,6 +152,63 @@ jobs:
             echo "::error::terraform plan failed"
             exit 1
           fi
+          terraform show -json tfplan > plan.json
+          python - <<'PY'
+          import json
+          with open("plan.json", "r", encoding="utf-8") as f:
+              plan = json.load(f)
+          resources = []
+          counts = {"add": 0, "change": 0, "destroy": 0}
+          for rc in plan.get("resource_changes") or []:
+              actions = (rc.get("change") or {}).get("actions") or []
+              if not actions or actions == ["no-op"] or actions == ["read"]:
+                  continue
+              action = "update"
+              if actions == ["create"]:
+                  action = "create"
+                  counts["add"] += 1
+              elif actions == ["delete"]:
+                  action = "delete"
+                  counts["destroy"] += 1
+              elif "create" in actions and "delete" in actions:
+                  action = "replace"
+                  counts["add"] += 1
+                  counts["destroy"] += 1
+              else:
+                  counts["change"] += 1
+              before = (rc.get("change") or {}).get("before") or {}
+              after = (rc.get("change") or {}).get("after") or {}
+              tags_b = (before.get("tags") or before.get("tags_all") or {}) if isinstance(before, dict) else {}
+              tags_a = (after.get("tags") or after.get("tags_all") or {}) if isinstance(after, dict) else {}
+              name_tag = ""
+              if isinstance(tags_a, dict):
+                  name_tag = tags_a.get("Name") or tags_a.get("name") or ""
+              if not name_tag and isinstance(tags_b, dict):
+                  name_tag = tags_b.get("Name") or tags_b.get("name") or ""
+              resources.append({
+                  "address": rc.get("address") or "",
+                  "type": rc.get("type") or "",
+                  "name": rc.get("name") or "",
+                  "actions": actions,
+                  "action": action,
+                  "name_tag": name_tag or "—",
+              })
+          summary = (
+              f"Plan: {counts['add']} to add, {counts['change']} to change, "
+              f"{counts['destroy']} to destroy."
+          )
+          out = {
+              "ok": True,
+              "auth_mode": "oidc",
+              "summary": summary,
+              "counts": counts,
+              "resources": resources,
+          }
+          with open("plan-summary.json", "w", encoding="utf-8") as f:
+              json.dump(out, f, indent=2)
+          print(summary)
+          print(f"Resource changes: {len(resources)}")
+          PY
           {
             echo "## Modify review — Terraform plan (\`${{ matrix.directory }}\`)"
             echo ""
@@ -162,12 +223,13 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload plan artifact
+      - name: Upload plan artifact for agent
         uses: actions/upload-artifact@v4
         with:
           name: modify-review-plan-${{ strategy.job-index }}
           path: |
-            ${{ matrix.directory }}/tfplan
+            ${{ matrix.directory }}/plan-summary.json
             ${{ matrix.directory }}/plan.txt
+            ${{ matrix.directory }}/plan.json
           if-no-files-found: warn
-          retention-days: 5
+          retention-days: 1
