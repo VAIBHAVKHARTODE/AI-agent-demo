@@ -1,4 +1,3 @@
-
 variable "aws_region" {
   description = "AWS region to deploy resources into"
   type        = string
@@ -20,7 +19,7 @@ variable "environment" {
 variable "instance_type" {
   description = "EC2 instance type"
   type        = string
-  default     = "t2.micro"
+  default     = "t3.micro"
 }
 
 variable "root_volume_size" {
