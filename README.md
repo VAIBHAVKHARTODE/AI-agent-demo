@@ -1,4 +1,4 @@
-# AI Agent Demo
+# Terraform AI Agent Demo
 
 AI-powered Terraform automation demo for AWS infrastructure.
 Generates and manages Terraform code using an AI Agent.
