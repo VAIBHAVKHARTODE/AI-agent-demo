@@ -1,3 +1,4 @@
+
 variable "aws_region" {
   description = "AWS region to deploy resources into"
   type        = string
@@ -7,7 +8,7 @@ variable "aws_region" {
 variable "project_name" {
   description = "Project name used for tagging and naming"
   type        = string
-  default     = "vaibhavaipoc"
+  default     = "Manas-Instance"
 }
 
 variable "environment" {
@@ -44,5 +45,6 @@ variable "tags" {
     CostCenter  = "poc"
     ManagedBy   = "terraform"
     BusinessUnit = "engineering"
+    Product     = "ManasAIPOC"
   }
 }
