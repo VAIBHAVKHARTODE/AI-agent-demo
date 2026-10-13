@@ -5,13 +5,13 @@ variable "aws_region" {
 }
 
 variable "project_name" {
-  description = "Project name used for tagging and naming"
+  description = "Project name used for tagging and naming resources"
   type        = string
   default     = "vaibhavaipoc"
 }
 
 variable "environment" {
-  description = "Environment name"
+  description = "Environment name (dev, test, qa, uat, stage, prod)"
   type        = string
   default     = "dev"
 }
@@ -29,7 +29,7 @@ variable "root_volume_size" {
 }
 
 variable "ssh_ingress_cidr" {
-  description = "CIDR block allowed to SSH into the instance (POC only)"
+  description = "CIDR block allowed to SSH into the instance (POC only - open to 0.0.0.0/0)"
   type        = string
   default     = "0.0.0.0/0"
 }
@@ -41,5 +41,8 @@ variable "tags" {
     Project     = "vaibhavaipoc"
     Environment = "dev"
     ManagedBy   = "terraform"
+    Owner       = "platform-team"
+    CostCenter  = "shared"
+    BusinessUnit = "engineering"
   }
 }

@@ -4,7 +4,7 @@ module "ec2_sg" {
 
   name            = "${var.project_name}-sg"
   use_name_prefix = false
-  description     = "SG for ${var.project_name} EC2 - SSH access"
+  description     = "Security group for ${var.project_name} EC2 instance - SSH access only"
   vpc_id          = data.aws_vpc.default.id
 
   ingress_with_cidr_blocks = [
@@ -12,8 +12,8 @@ module "ec2_sg" {
       from_port   = 22
       to_port     = 22
       protocol    = "tcp"
-      description = "SSH access"
       cidr_blocks = var.ssh_ingress_cidr
+      description = "SSH access (POC only)"
     }
   ]
 
@@ -30,22 +30,22 @@ module "ec2" {
 
   name = var.project_name
 
-  instance_type = var.instance_type
-  ami           = data.aws_ami.al2023.id
-
-  subnet_id = data.aws_subnets.default.ids[0]
-
+  ami                    = data.aws_ami.al2023.id
+  instance_type          = var.instance_type
+  subnet_id              = data.aws_subnets.default.ids[0]
   create_security_group  = false
   vpc_security_group_ids = [module.ec2_sg.security_group_id]
 
+  associate_public_ip_address = true
+
   root_block_device = {
-      type           = "gp3"
-      size           = var.root_volume_size
-      encrypted             = true
-      delete_on_termination = true
+      type = "gp3"
+      size = var.root_volume_size
+      encrypted   = true
     }
 
   tags = merge(var.tags, {
-    Name = var.project_name
+    Name    = var.project_name
+    Project = var.project_name
   })
 }
