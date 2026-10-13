@@ -1,23 +1,17 @@
-# Modify Infra — GitHub plan review (plan only, no apply).
+# Modify Infra — optional GitHub plan review (plan only, no apply).
 #
-# NOTE: Analyze & Modify in the agent does NOT use this workflow and does NOT
-# create a PR. It runs terraform plan locally and shows results in the UI.
-#
-# This workflow runs only when a PR is opened/updated (Create PR Only) so
-# reviewers can see the plan on GitHub before Deploy via Pipeline.
+# IMPORTANT:
+# - Analyze & Modify in the agent does NOT trigger this workflow.
+# - Analyze runs terraform plan locally and shows files/resources in the UI.
+# - This workflow is manual only (workflow_dispatch) if you want a plan on GitHub.
+# - Create PR Only does not auto-start this workflow either.
 name: Terraform AWS Modify Review
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - "**.tf"
-      - "**.tfvars"
-      - ".github/workflows/terraform-aws-modify-review.yml"
   workflow_dispatch:
     inputs:
       ref:
-        description: "Branch or SHA to plan (default = current ref)"
+        description: "Optional override ref (default = branch you run the workflow on)"
         required: false
         type: string
         default: ""
@@ -25,10 +19,9 @@ on:
 permissions:
   contents: read
   id-token: write
-  pull-requests: write
 
 concurrency:
-  group: terraform-aws-modify-review-${{ github.repository }}-${{ github.head_ref || github.ref }}
+  group: terraform-aws-modify-review-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -54,8 +47,6 @@ jobs:
           set -euo pipefail
           if [ -n "${{ inputs.ref }}" ]; then
             echo "checkout_ref=${{ inputs.ref }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "checkout_ref=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
           else
             echo "checkout_ref=${{ github.ref }}" >> "$GITHUB_OUTPUT"
           fi
@@ -166,7 +157,6 @@ jobs:
               echo "Plan has changes (review before Deploy via Pipeline)."
               echo ""
               echo '```hcl'
-              # Prefer human-readable summary lines
               grep -E '^(Plan:|# |  # |~|\+|-)|\sto (add|change|destroy)' plan.txt | head -n 200 || true
               echo '```'
             fi
@@ -181,28 +171,3 @@ jobs:
             ${{ matrix.directory }}/plan.txt
           if-no-files-found: warn
           retention-days: 5
-
-      - name: Comment plan on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const dir = '${{ matrix.directory }}';
-            let body = '## Modify Infra — plan review (`' + dir + '`)\n\n';
-            body += '_Plan only — no apply. Use **Deploy via Pipeline** in the agent to apply._\n\n';
-            try {
-              const txt = fs.readFileSync(dir === '.' ? 'plan.txt' : dir + '/plan.txt', 'utf8');
-              const lines = txt.split('\n').filter(l =>
-                /Plan:|# .* will be|^\s*[~+-]/.test(l) || /to (add|change|destroy)/.test(l)
-              ).slice(0, 120);
-              body += '```hcl\n' + (lines.join('\n') || '(see workflow logs)') + '\n```\n';
-            } catch (e) {
-              body += '_Could not read plan.txt — see Actions logs._\n';
-            }
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body,
-            });
