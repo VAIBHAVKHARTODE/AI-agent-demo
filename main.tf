@@ -1,3 +1,4 @@
+
 module "ec2_sg" {
   source  = "terraform-aws-modules/security-group/aws"
   version = "~> 5.0"
@@ -46,5 +47,6 @@ module "ec2_instance" {
   tags = merge(var.tags, {
     Name    = var.project_name
     Project = var.project_name
+    Product = "cybage"
   })
 }
