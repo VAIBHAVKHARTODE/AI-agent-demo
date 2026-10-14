@@ -1,3 +1,4 @@
+
 variable "aws_region" {
   description = "AWS region to deploy resources into"
   type        = string
@@ -44,5 +45,6 @@ variable "tags" {
     CostCenter  = "poc"
     ManagedBy   = "terraform"
     BusinessUnit = "engineering"
+    Product     = "cybage"
   }
 }
